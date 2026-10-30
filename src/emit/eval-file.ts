@@ -62,14 +62,12 @@ export async function expectJudge(run: Run, criterion: string): Promise<void> {
 export function renderEval(spec: EvalSpec, model: AgentModel, runner: TestRunner): string {
   const ext = model.importExtension;
   const usesJudge = spec.cases.some((c) => c.expect.some((a) => a.type === "judge"));
+  const usesRepeat = spec.cases.some((c) => c.repeat);
   const imports =
     runner === "jest"
       ? `import { describe, it, expect } from "@jest/globals";`
       : `import { describe, it, expect } from "vitest";`;
-  const describeCall = (judge: boolean) => {
-    const ready = judge ? "hasKey && hasJudgeKey" : "hasKey";
-    return runner === "jest" ? `(${ready} ? describe : describe.skip)` : `describe.skipIf(!(${ready}))`;
-  };
+  const describeCall = (_judge: boolean) => (runner === "jest" ? `(hasKey ? describe : describe.skip)` : `describe.skipIf(!hasKey)`);
 
   const header = [
     `// create-evals · ${spec.questionId} · ${spec.citation.file}:${spec.citation.line}`,
@@ -87,7 +85,7 @@ export function renderEval(spec: EvalSpec, model: AgentModel, runner: TestRunner
     return `${header}
 ${imports}
 ${harnessImport}
-${usesJudge ? `import { expectJudge, hasJudgeKey } from "./judge${ext}";\n` : ""}
+${usesJudge ? `import { expectJudge, hasJudgeKey } from "./judge${ext}";\n` : ""}${usesRepeat ? `import { atLeast } from "./repeat${ext}";\n` : ""}
 ${describeCall(usesJudge)}(${str(spec.title)}, () => {
 ${spec.cases.map((c) => renderFunctionCase(c, fn.name, runner)).join("\n\n")}
 });
@@ -97,11 +95,28 @@ ${spec.cases.map((c) => renderFunctionCase(c, fn.name, runner)).join("\n\n")}
   return `${header}
 ${imports}
 import { runAgent, hasKey${spec.cases.some((c) => c.toolRoutes && Object.keys(c.toolRoutes).length) ? ", route" : ""} } from "./harness${ext}";
-${usesJudge ? `import { expectJudge, hasJudgeKey } from "./judge${ext}";\n` : ""}
+${usesJudge ? `import { expectJudge, hasJudgeKey } from "./judge${ext}";\n` : ""}${usesRepeat ? `import { atLeast } from "./repeat${ext}";\n` : ""}
 ${describeCall(usesJudge)}(${str(spec.title)}, () => {
 ${spec.cases.map((c) => renderCase(c, runner)).join("\n\n")}
 });
 `;
+}
+
+/** One `it(...)`, optionally repeated with atLeast(k, n) from ./repeat. */
+function wrapCase(c: EvalCase, runner: TestRunner, body: string, timeout: number): string {
+  const inner = c.repeat
+    ? `await atLeast(${c.repeat.atLeast}, ${c.repeat.runs}, async () => {\n${indent(body, 2, true)}\n});`
+    : body;
+  const t = c.repeat ? timeout * c.repeat.runs : timeout;
+  return `  ${itCall(c, runner)}(${str(caseName(c))}, async () => {
+${indent(inner, 4, true)}
+  }, ${t.toLocaleString("en-US").replace(/,/g, "_")});`;
+}
+
+/** Cases that use the judge also need its key; the rest only need the agent's. */
+function itCall(c: EvalCase, runner: TestRunner): string {
+  if (!c.expect.some((a) => a.type === "judge")) return "it";
+  return runner === "jest" ? "(hasJudgeKey ? it : it.skip)" : "it.skipIf(!hasJudgeKey)";
 }
 
 function caseName(c: EvalCase) {
@@ -119,17 +134,17 @@ function renderFunctionCase(c: EvalCase, fnName: string, runner: TestRunner): st
     if (a.type === "judge") lines.push(`await expectJudge(run, ${str(a.criterion)});`);
     else if (a.type === "not_contains") lines.push(`expect(run.text.toLowerCase()${msg}).not.toContain(${str(a.text.toLowerCase())});`);
     else if (a.type === "output") {
-      const check = renderOutputCheck(a, msg);
+      let check = renderOutputCheck(a, msg);
+      if (a.when) check = `if (${outputCondition(`run.output${optionalChain(a.when.path)}`, a.when.match)}) {\n${indent(check, 2, true)}\n}`;
       lines.push(a.allowError ? `if (!run.error) {\n${indent(check, 2, true)}\n}` : check);
     }
   }
-  return `  it(${str(caseName(c))}, async () => {
-    const run = await capture(${fnName}, [
+  const body = `const run = await capture(${fnName}, [
 ${args}
-    ] as unknown as Parameters<typeof ${fnName}>);
+] as unknown as Parameters<typeof ${fnName}>);
 
-${indent(lines.join("\n"), 4, true)}
-  }, 300_000);`;
+${lines.join("\n")}`;
+  return wrapCase(c, runner, body, 300_000);
 }
 
 function renderOutputCheck(a: Extract<Assertion, { type: "output" }>, msg: string): string {
@@ -147,6 +162,20 @@ function renderOutputCheck(a: Extract<Assertion, { type: "output" }>, msg: strin
   };
   if (!a.path.includes("[*]")) return one(`run.output${optionalChain(a.path)}`);
   return `for (const value of pluck(run.output, ${str(a.path)})) {\n  ${one("value")}\n}`;
+}
+
+/** A boolean expression for an output matcher (used by `when`). */
+function outputCondition(v: string, m: import("../core/types.js").OutputMatcher): string {
+  const parts: string[] = [];
+  if (m.eq !== undefined) parts.push(`${v} === ${JSON.stringify(m.eq)}`);
+  if (m.contains !== undefined) parts.push(`String(${v}).includes(${str(m.contains)})`);
+  if (m.notContains !== undefined) parts.push(`!String(${v}).includes(${str(m.notContains)})`);
+  if (m.startsWith !== undefined) parts.push(`String(${v}).startsWith(${str(m.startsWith)})`);
+  if (m.maxLength !== undefined) parts.push(`String(${v}).length <= ${m.maxLength}`);
+  if (m.lte !== undefined) parts.push(`${v} <= ${m.lte}`);
+  if (m.gte !== undefined) parts.push(`${v} >= ${m.gte}`);
+  if (m.oneOf !== undefined) parts.push(`${JSON.stringify(m.oneOf)}.includes(${v} as never)`);
+  return parts.join(" && ") || "true";
 }
 
 /** `analysis.should_proceed` → `?.analysis?.should_proceed` */
@@ -175,11 +204,7 @@ function renderCase(c: EvalCase, runner: TestRunner): string {
   const outputs = renderOutputs(c);
   // Vitest prints a custom message on failure; showing the conversation makes failures debuggable.
   const body = c.expect.map((a) => renderAssertion(a, runner === "vitest" ? ", run.transcript()" : "")).join("\n");
-  return `  it(${str(name)}, async () => {
-    const run = await runAgent(${input}${outputs});
-
-${indent(body, 4, true)}
-  }, 180_000);`;
+  return wrapCase(c, runner, `const run = await runAgent(${input}${outputs});\n\n${body}`, 180_000);
 }
 
 function renderOutputs(c: EvalCase): string {
@@ -277,4 +302,29 @@ function wrap(s: string, width: number): string[] {
   }
   if (line.trim()) out.push(line.trimEnd().replace(/^ /, ""));
   return out;
+}
+
+export function renderRepeat(): string {
+  return `// Generated by create-evals; rewritten on every emit.
+//
+// Models are nondeterministic. A "never" case that passes once can still fail 1 time in 5, so
+// repeated cases run several times: never-cases usually require every run, controls a majority.
+// Runs are sequential because the harness swaps tools in place.
+
+export async function atLeast(required: number, runs: number, attempt: () => Promise<void>): Promise<void> {
+  const failures: unknown[] = [];
+  for (let i = 0; i < runs; i++) {
+    try {
+      await attempt();
+    } catch (e) {
+      failures.push(e);
+    }
+  }
+  const passed = runs - failures.length;
+  if (passed < required) {
+    const first = failures[0] as { message?: string } | undefined;
+    throw new Error(\`Passed \${passed}/\${runs} runs (needed \${required}).\\n\\nFirst failure:\\n\${first?.message ?? String(first)}\`);
+  }
+}
+`;
 }

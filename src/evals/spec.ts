@@ -17,6 +17,17 @@ const ArgMatcher = z
   })
   .describe("Constraint on one tool argument: eq, ne, lte, gte, contains, notContains, or absent (missing/null/false).");
 
+const OutputMatchSchema = z.object({
+  eq: z.union([z.string(), z.number(), z.boolean(), z.null()]).optional(),
+  contains: z.string().optional(),
+  notContains: z.string().optional(),
+  startsWith: z.string().optional(),
+  maxLength: z.number().optional(),
+  lte: z.number().optional(),
+  gte: z.number().optional(),
+  oneOf: z.array(z.union([z.string(), z.number(), z.boolean()])).optional(),
+});
+
 const Assertion = z.discriminatedUnion("type", [
   z.object({ type: z.literal("not_called"), tool: z.string(), with: z.record(z.string(), ArgMatcher).optional() }),
   z.object({ type: z.literal("called"), tool: z.string(), with: z.record(z.string(), ArgMatcher).optional() }),
@@ -27,17 +38,12 @@ const Assertion = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("output"),
     path: z.string().describe('Dotted path into the return value; [*] = every array element, e.g. "output.changes[*].file_path". "" = the return value itself.'),
-    match: z.object({
-      eq: z.union([z.string(), z.number(), z.boolean(), z.null()]).optional(),
-      contains: z.string().optional(),
-      notContains: z.string().optional(),
-      startsWith: z.string().optional(),
-      maxLength: z.number().optional(),
-      lte: z.number().optional(),
-      gte: z.number().optional(),
-      oneOf: z.array(z.union([z.string(), z.number(), z.boolean()])).optional(),
-    }),
+    match: OutputMatchSchema,
     allowError: z.boolean().optional().describe("The function throwing also passes (a refusal is a safe outcome)"),
+    when: z
+      .object({ path: z.string(), match: OutputMatchSchema })
+      .optional()
+      .describe("Only check this when another field matches, e.g. reply has no refund promise when auto_close is true"),
   }),
 ]);
 
@@ -57,6 +63,11 @@ export const EvalCaseSchema = z.object({
     .optional()
     .describe("Input-dependent results, e.g. different run_shell output per command. First matching route wins."),
   expect: z.array(Assertion).min(1),
+  repeat: z
+    .object({ runs: z.number().int().min(2).max(10), atLeast: z.number().int().min(1) })
+    .refine((r) => r.atLeast <= r.runs, "atLeast can't exceed runs")
+    .optional()
+    .describe("Run the case several times: never-cases usually require all runs, controls a majority"),
 });
 
 export const EvalSpecSchema = z.object({
@@ -96,7 +107,7 @@ export function validateSpec(spec: EvalSpec, model: AgentModel): string[] {
         const last = a.path.replace(/\[(\*|\d+)\]/g, "").split(".").filter(Boolean).at(-1);
         // Shapes the caller decides (unknown/any/generic records) can't be checked statically.
         const dynamic = /\b(unknown|any|Record<|T\b|object)\b/.test(fn.entry.returnType) && !(fn.outputFields ?? []).length;
-        const known = !last || dynamic || (fn.outputFields ?? []).some((f) => f.name === last) || fn.entry.returnType.includes(last);
+        const known = !last || last === "length" || dynamic || (fn.outputFields ?? []).some((f) => f.name === last) || fn.entry.returnType.includes(last);
         if (!known) problems.push(`${where}: output path "${a.path}" — "${last}" isn't a field ${fn.name} returns (returns ${fn.entry.returnType.slice(0, 160)})`);
       }
       if (c.expect.some((a) => !["output", "judge", "not_contains"].includes(a.type))) problems.push(`${where}: LLM-function evals use "output", "not_contains", and "judge" assertions`);

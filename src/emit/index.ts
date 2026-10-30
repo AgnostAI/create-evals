@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { AgentModel, AnsweredQuestion, EvalSpec, TestRunner } from "../core/types.js";
-import { evalFileName, renderEval, renderJudge } from "./eval-file.js";
+import { evalFileName, renderEval, renderJudge, renderRepeat } from "./eval-file.js";
 import { renderHarness } from "./harness.js";
 
 /** Versions we generate code against. */
@@ -49,6 +49,7 @@ export function emit(model: AgentModel, specs: EvalSpec[], opts: EmitOptions = {
   write("harness.ts", renderHarness(model), true);
   const usesJudge = specs.some((s) => s.cases.some((c) => c.expect.some((a) => a.type === "judge")));
   if (usesJudge) write("judge.ts", renderJudge(model), true);
+  if (specs.some((s) => s.cases.some((c) => c.repeat))) write("repeat.ts", renderRepeat());
   const current = new Set(specs.map((spec, i) => evalFileName(spec, i)));
   // Re-emitting renumbers files; drop earlier generated evals that are no longer in the spec set.
   for (const name of readdirSync(dir)) {

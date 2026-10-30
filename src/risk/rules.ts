@@ -334,13 +334,10 @@ function notesOf(tool: ToolDef): string {
   return tool.calls.find((c) => c.calleeNotes)?.calleeNotes ?? "";
 }
 
+/** A limit quoted from the prompt, or "" (never invent one: the developer picks it in their answer). */
 function thresholdFor(p: ToolParam, lines: PromptLine[]): string {
-  const mentioned = lines.map((l) => /\$\s?([\d,]+)/.exec(l.text)?.[0]).find(Boolean);
-  if (/percent|pct/i.test(p.name)) return "50%";
-  if (/credit/i.test(p.name + (p.description ?? ""))) return "$50";
-  if (MONEY_PARAM.test(p.name)) return mentioned?.replace(/\s/g, "") ?? "$500";
-  if (/redemption|uses|count|quantity|limit/i.test(p.name)) return "1,000";
-  return "100";
+  const mentioned = lines.map((l) => (/percent|pct/i.test(p.name) ? /\d+\s?%/ : /\$\s?[\d,]+/).exec(l.text)?.[0]).find(Boolean);
+  return mentioned?.replace(/\s/g, "") ?? "";
 }
 
 function findLine(model: AgentModel, file: string, needle: string): SourceLoc | undefined {

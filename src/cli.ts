@@ -39,6 +39,7 @@ ${pc.bold("Usage")}
   npx create-evals emit [file]        validate eval specs and write tests (default .create-evals/specs.json)
   npx create-evals harness            write evals/harness.ts now (to wire it before writing specs)
   npx create-evals verify             typecheck the evals, check the harness is wired and the test runner picks them up
+  npx create-evals try [--runs N]     run the evals N times; each test shows as passed, failed, or flaky, with why
   npx create-evals skill [--agents]   install the skill into .claude/skills (and AGENTS.md with --agents)
 
 ${pc.bold("Options")}
@@ -53,6 +54,7 @@ interface Flags {
   _: string[];
   json?: boolean;
   model?: string;
+  runs?: string;
   answers?: string;
   out?: string;
   install: boolean;
@@ -72,7 +74,7 @@ function parseArgs(argv: string[]): Flags {
     else if (a === "--agents") flags.agents = true;
     else if (a === "--help" || a === "-h") flags.help = true;
     else if (a === "--version" || a === "-v") flags.version = true;
-    else if (a === "--model" || a === "--answers" || a === "--out") flags[a.slice(2) as "model" | "answers" | "out"] = argv[++i];
+    else if (a === "--model" || a === "--answers" || a === "--out" || a === "--runs") flags[a.slice(2) as "model" | "answers" | "out" | "runs"] = argv[++i];
     else if (a.startsWith("--")) fail(`Unknown option ${a}. See --help.`);
     else flags._.push(a);
   }
@@ -114,6 +116,7 @@ async function main() {
   if (cmd === "skill") return cmdSkill(path.resolve(rest[0] ?? "."), flags);
   if (cmd === "verify") return cmdVerify(path.resolve("."), flags);
   if (cmd === "harness") return cmdHarness(path.resolve("."), flags);
+  if (cmd === "try") return cmdTry(path.resolve("."), flags);
   return cmdInteractive(path.resolve(cmd ?? "."), flags);
 }
 
@@ -199,6 +202,85 @@ function cmdEmit(root: string, file: string, flags: Flags) {
   printFinish(w, result.files.filter((f) => f.endsWith(".eval.test.ts")), w.model.providerEnv);
 }
 
+/**
+ * Run the generated evals (optionally several times) and summarize each test as passed, failed, or
+ * flaky, with the first line of why. This is the calibration loop: a failing control usually means
+ * a badly written eval; a failing risk case is usually a real catch.
+ */
+function cmdTry(root: string, flags: Flags) {
+  const w = workspace(root);
+  const rel = flags.out ?? "evals";
+  if (!existsSync(path.join(root, rel))) fail(`No ${rel}/ yet. Run \`create-evals emit\` first.`);
+  const required = w.model.requiredEnv ?? [w.model.providerEnv];
+  const missing = required.filter((v) => !process.env[v]);
+  if (missing.length) fail(`Set ${missing.join(", ")} first; without it every eval is skipped.`);
+
+  const runs = Math.max(1, Number(flags.runs ?? 1));
+  const runner = w.model.runner ?? "vitest";
+  const report = path.join(root, ".create-evals", "try.json");
+  mkdirSync(path.dirname(report), { recursive: true });
+  const results = new Map<string, { status: string[]; message?: string; file: string }>();
+
+  for (let i = 0; i < runs; i++) {
+    const s = p.spinner();
+    s.start(`Running the evals${runs > 1 ? ` (${i + 1}/${runs})` : ""}`);
+    const bin = path.join(root, "node_modules", ".bin", runner);
+    const args = runner === "jest" ? [rel, "--json", `--outputFile=${report}`] : ["run", rel, "--reporter=json", `--outputFile=${report}`];
+    spawnSync(existsSync(bin) ? bin : "npx", existsSync(bin) ? args : [runner, ...args], { cwd: root, encoding: "utf8", stdio: "ignore" });
+    s.stop(`Run ${i + 1} done`);
+    if (!existsSync(report)) fail(`The test runner didn't produce a report. Run \`create-evals verify\` and try again.`);
+    const json = JSON.parse(readFileSync(report, "utf8")) as { testResults: { name: string; assertionResults: { fullName: string; status: string; failureMessages?: string[] }[] }[] };
+    for (const file of json.testResults) {
+      for (const t of file.assertionResults) {
+        const entry = results.get(t.fullName) ?? { status: [], file: path.relative(root, file.name) };
+        entry.status.push(t.status);
+        if (t.status === "failed" && !entry.message) entry.message = firstLine(t.failureMessages?.join("\n") ?? "", root, rel);
+        results.set(t.fullName, entry);
+      }
+    }
+  }
+
+  let failed = 0;
+  let flaky = 0;
+  const byFile = new Map<string, string[]>();
+  for (const [name, r] of results) {
+    const passes = r.status.filter((x) => x === "passed").length;
+    const skipped = r.status.every((x) => x === "skipped" || x === "pending");
+    const mark = skipped ? pc.dim("–") : passes === r.status.length ? pc.green("✔") : passes === 0 ? pc.red("✖") : pc.yellow("~");
+    if (!skipped && passes === 0) failed++;
+    else if (!skipped && passes < r.status.length) flaky++;
+    const line = `  ${mark} ${name.replace(/^.*? > /, "")}${runs > 1 && !skipped ? pc.dim(` (${passes}/${r.status.length})`) : ""}${r.message && passes < r.status.length ? `\n      ${pc.dim(r.message)}` : ""}`;
+    byFile.set(r.file, [...(byFile.get(r.file) ?? []), line]);
+  }
+  for (const [file, lines] of byFile) console.log(`${pc.bold(file)}\n${lines.join("\n")}`);
+  const total = results.size;
+  console.log(`\n${total - failed - flaky}/${total} passed${failed ? `, ${pc.red(`${failed} failed`)}` : ""}${flaky ? `, ${pc.yellow(`${flaky} flaky`)}` : ""}${runs > 1 ? ` over ${runs} runs` : ""}`);
+  if (failed || flaky) {
+    console.log(
+      pc.dim(
+        "For each failure: a failing control or an over-broad judge is usually a badly written eval (fix the spec and re-emit); a failing risk case is usually a real catch (tell the developer). Flaky never-cases are worth a `repeat`.",
+      ),
+    );
+    process.exit(1);
+  }
+}
+
+function firstLine(message: string, root = "", rel = "evals"): string {
+  const clean = message.replace(/\x1b\[[0-9;]*m/g, "");
+  const judge = /failed because: (.*)/.exec(clean)?.[1];
+  // Assertion messages start with the transcript; the verdict is the last "expected …" line.
+  const expected = [...clean.matchAll(/(expected [^\n]*)/g)].at(-1)?.[1];
+  const other = /(?:Error|AssertionError): ([^\n]*)/.exec(clean)?.[1];
+  let text = judge ? `judge: ${judge}` : expected ?? other ?? clean.split("\n")[0] ?? "";
+  // Show which check failed: the assertion's own source line, from the stack.
+  const at = new RegExp(`${rel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/([^:\\s)]+):(\\d+):\\d+`).exec(clean);
+  if (!judge && at && root) {
+    const src = readFileSync(path.join(root, rel, at[1]!), "utf8").split("\n")[Number(at[2]) - 1]?.trim();
+    if (src) text = `${src.replace(/, run\.transcript\(\)/, "")}  →  ${text}`;
+  }
+  return text.length > 220 ? text.slice(0, 220) + "…" : text;
+}
+
 /** Write evals/harness.ts now, so it can be wired (or extended with wrappers) before specs exist. */
 function cmdHarness(root: string, flags: Flags) {
   const w = workspace(root);
@@ -252,7 +334,8 @@ function cmdVerify(root: string, flags: Flags) {
   if (!ok) process.exit(1);
   const required = w.model.requiredEnv ?? [w.model.providerEnv];
   const judge = existsSync(path.join(dir, "judge.ts"));
-  const keys = [...new Set([...required, ...(judge ? ["ANTHROPIC_API_KEY (judge)"] : [])])];
+  const keys = [...required];
+  if (judge && !keys.includes("ANTHROPIC_API_KEY")) keys.push("ANTHROPIC_API_KEY (for the judge)");
   console.log(pc.green(`✔ ready: run the tests. They call your real model${keys.length ? `; set ${keys.join(" and ")}` : ""} (without them they skip).`));
 }
 

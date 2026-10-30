@@ -31,6 +31,7 @@ Your coding agent does the understanding: it finds the agent wherever it lives (
 | `check` | Verifies every `file:line` the agent claims (its map of the agent, and every question) against the real files |
 | `emit` | Turns the answered questions into test files, a harness that records tool calls, and a judge |
 | `verify` | Typechecks the evals against your code, and checks the harness is wired and your test runner will pick them up |
+| `try --runs N` | Runs the evals N times and marks each test passed, failed, or flaky, with the failing check, so your agent can fix badly written evals and report real catches before handing over |
 
 No API key needed beyond the ones your agent already uses. Then run your tests.
 

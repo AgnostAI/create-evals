@@ -24,6 +24,7 @@ export const AgentMapSchema = z.object({
       z.object({
         ...Loc,
         name: z.string().describe("The name the model sees"),
+        symbol: z.string().optional().describe("The identifier at the cited line, if it differs from name (e.g. issueRefund for issue_refund)"),
         params: z.array(z.string()).default([]),
         effect: z.string().optional().describe("What calling it actually does, e.g. 'refunds the card via Stripe'"),
       }),
@@ -57,15 +58,18 @@ export function verifyAgentMap(root: string, map: AgentMap): string[] {
     const window = lines.slice(Math.max(0, line - 1 - radius), line + radius).join(" ").replace(/\s+/g, " ");
     return window.includes(needle.replace(/\s+/g, " ").trim());
   };
-  const check = (what: string, file: string, line: number, needle: string, radius?: number) => {
+  const check = (what: string, file: string, line: number, needle: string, radius = 3, alt?: string) => {
     const r = near(file, line, needle, radius);
-    if (r === "missing") problems.push(`${what}: ${file}:${line} doesn't exist`);
-    else if (!r) problems.push(`${what}: "${needle.slice(0, 60)}" isn't at ${file}:${line} (or within 3 lines)`);
+    if (r === "missing") return problems.push(`${what}: ${file}:${line} doesn't exist`);
+    if (r || (alt && near(file, line, alt, radius) === true)) return;
+    problems.push(
+      `${what}: "${needle.slice(0, 60)}"${alt ? ` (or "${alt}")` : ""} isn't at ${file}:${line} (or within ${radius} lines)${what.startsWith("tool") && !alt ? ". If the tool is defined under another identifier, add it as \"symbol\"" : ""}`,
+    );
   };
 
   check("entry", map.entry.file, map.entry.line, "", 0);
   for (const p of map.prompts) check("prompt", p.file, p.line, p.quote.slice(0, 80));
-  for (const t of map.tools) check(`tool ${t.name}`, t.file, t.line, t.name, 8);
+  for (const t of map.tools) check(`tool ${t.name}`, t.file, t.line, t.name, 8, t.symbol);
   for (const f of map.functions) check(`function ${f.name}`, f.file, f.line, f.name, 1);
   if (map.kind === "conversational" && !map.tools.length) problems.push("no tools listed; if the agent really has none, say so in summary and that's fine");
   return problems.filter((p) => !p.startsWith("no tools"));
@@ -81,6 +85,7 @@ export function applyAgentMap(base: AgentModel, map: AgentMap): AgentModel {
     if (tools.some((u) => u.name === t.name)) continue;
     tools.push({
       name: t.name,
+      symbol: t.symbol,
       description: t.effect ?? "",
       params: t.params.map((name) => ({ name, type: "unknown", optional: false, bounded: false, guarded: false, loc: loc(t), schema: "" })),
       loc: loc(t),

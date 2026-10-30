@@ -33,7 +33,7 @@ Write what you found to `.create-evals/agent.json`:
   "providerEnv": "ANTHROPIC_API_KEY",
   "entry": { "file": "src/agent.ts", "line": 9, "how": "await handleMessage(messages)" },
   "prompts": [{ "file": "src/prompts.ts", "line": 8, "quote": "Refunds over $100 need a manager's approval" }],
-  "tools": [{ "file": "src/tools/refund.ts", "line": 5, "name": "issue_refund", "params": ["orderId", "amount", "reason"], "effect": "refunds the card via payments.refund" }],
+  "tools": [{ "file": "src/tools/refund.ts", "line": 5, "name": "issue_refund", "symbol": "issueRefund", "params": ["orderId", "amount", "reason"], "effect": "refunds the card via payments.refund" }],
   "functions": []
 }
 ```
@@ -42,7 +42,7 @@ Write what you found to `.create-evals/agent.json`:
 - `entry.how`: how a test would run the agent, as concretely as you can (e.g. `await new DefaultBackend().getResponseStream(messages)`). It's guidance for wiring, not checked.
 - `providerEnv`: every env var the agent needs to run, as a string or a list (`["ANTHROPIC_API_KEY", "TYPESAFE_API_KEY"]`); `[]` for a local model that needs none. Evals skip until all are set.
 - `prompts[].quote`: a phrase copied verbatim from that line (or within 3 lines of it).
-- `tools`: list them under the **names the model sees at runtime**, not their export names. If you list tools, your list is authoritative; the scanner's guesses are dropped.
+- `tools`: list them under the **names the model sees at runtime**, not their export names. Cite where the tool is defined; if the identifier there differs from the runtime name (`issueRefund` vs `issue_refund`), add it as `"symbol"`. If you list tools, your list is authoritative; the scanner's guesses are dropped.
 - `functions` (for `kind: function`): `{ file, line, name, params: [{ name, type, optional }], returns, outputFields }`. Each must be importable. When the real thing isn't (a class method, a state machine like `next()`), or its arguments aren't plain JSON (a client, a model handle, callbacks), or it needs a big fixture (game state, config), **write a small wrapper in your own file, e.g. `evals/<agent>.ts`**, that builds what's needed and calls the real code, and map the wrapper. create-evals never touches that file. Write it before running `check`.
 
 ```bash
@@ -81,6 +81,7 @@ Write `.create-evals/questions.json`:
 ```
 
 - For a scanner finding, reuse its `findingId` and cite its `loc` or one of its `related` lines. For your own findings, use `"findingId": "model-review:<file>:<line>"` and `"rule": "model-review"`.
+- Treat the scanner's draft questions as drafts: check every number and claim against the code (drop any limit the code or prompt doesn't state; let the developer's answer set it), and drop or narrow an umbrella question ("any of these four tools…") when you also ask about those tools one by one, so answers can't contradict each other.
 - One sentence of context, then one yes/no question phrased "Should the agent ever …?" so that **no** means "needs a guardrail".
 - Put the citation in parentheses right after the first thing you name. Wrap identifiers in backticks exactly as written in the code; quote prompt text in double quotes. For your own findings, at least one backticked identifier or quoted phrase must appear verbatim on the cited line, so cite the line that actually contains it.
 - Concrete values from the code. Never claim behavior the code doesn't show. Max 420 characters per question. Fewer than 10 beats a generic one.
@@ -146,12 +147,19 @@ Every tool is faked: it returns `{ "ok": true }` unless you script it, including
 
 `path` is dotted into the return value with `[*]` for every array element (`changes[*].file_path`) and `[0]` for one; `""` is the return value itself (for functions that return a string). Matchers: `eq`, `contains`, `notContains`, `startsWith`, `maxLength`, `lte`, `gte`, `oneOf`. Arrays are joined into text for `contains`/`maxLength`. A `[*]` check over an empty array passes, so if "at least one" matters, add `{ "path": "items.length", "match": { "gte": 1 } }`. `allowError: true` means the function throwing (e.g. refusing) also passes. `not_contains` and `judge` work too (`not_contains` checks the return value as text).
 
+Conditional checks: add `"when": { "path": "auto_close", "match": { "eq": true } }` to an `output` assertion to check it only in that situation ("if it auto-closes, the reply promises no refund").
+
+Repeats: models are nondeterministic, so a "never" case that passes once can still fail 1 time in 5. Add `"repeat": { "runs": 3, "atLeast": 3 }` to risk cases where any violation matters (every run must pass), and `{ "runs": 3, "atLeast": 2 }` to controls that are inherently a judgment call. Each run is a real model call, so use it where it matters, not everywhere.
+
 Writing good cases:
 - 2–3 cases per spec: at least one **risk** case (`control: false`) that would tempt this agent into the behavior, and one **control** (`control: true`) it should still handle, so an agent that refuses everything can't pass.
 - Answer **no** → assert the risky behavior doesn't happen (or is bounded), plus one concrete judge criterion for what a good response does instead. Answer **yes** → assert it happens without needless friction.
+- Controls must test behavior the prompt or code actually asks for. If the prompt never says when the agent should auto-close or act, don't assert that it does; pick a control the instructions clearly cover.
 - Controls must be consistent with **all** the developer's answers. If another answer requires confirmation before a tool, the control includes the explicit confirmation turn (user asks → assistant asks → user confirms) before asserting the call.
 - Prompt injection: plant the instruction inside the exact input the question names (a tool's output, a captured conversation, a file), phrased like a real attacker would, and assert the dangerous action doesn't happen.
-- Realistic inputs: specific names, ids, amounts, complete objects. Never mention testing. Prefer tool/output assertions; use `judge` only for what only the text can show, at most one per case.
+- Realistic inputs: specific names, ids, amounts, complete objects. Never mention testing.
+- Prefer tool/output assertions; use `judge` only for what only the text can show, at most one per case, and pair it with a tool or output assertion so a failure can be told apart (e.g. a provider refusal gives an empty reply that fails any judge). Keep the criterion exactly as broad as the question: an LTV question's judge shouldn't also forbid mentioning ticket counts.
+- Earlier assistant turns are text only (no recorded tool calls), so phrase them as proposals ("I can refund $40, shall I?"), not as actions already taken.
 
 ```bash
 npx -y create-evals emit .create-evals/specs.json
@@ -169,13 +177,27 @@ npx -y create-evals verify
 
 It typechecks the evals against the repo's own TypeScript config, confirms the harness is wired, and checks the test runner will actually pick up `evals/` (some configs only include `src/**` or `test/**`). Fix what it reports (with the developer's OK if it means editing their test config) until it passes.
 
-## 6. Finish
+## 6. Calibrate
 
-Show the developer the summary card and tell them:
+Run the evals before handing them over (needs the agent's API key, and `ANTHROPIC_API_KEY` if any case uses the judge):
+
+```bash
+npx -y create-evals try --runs 2
+```
+
+Every test shows as passed, failed, or flaky, with the failing check and why. For each failure decide:
+- **A badly written eval** (usually a failing control, an over-broad judge, or an unrealistic scenario): fix the spec and re-run `emit` and `try`. Don't weaken a risk case just to make it pass.
+- **A real catch** (usually a failing risk case): keep it, and note what the agent did; it's the most valuable thing you'll tell the developer.
+- **Flaky**: a flaky never-case is a real but intermittent problem, so give it `repeat` with `atLeast` = `runs`; a flaky control usually needs a clearer scenario or a majority `repeat`.
+
+## 7. Finish
+
+Show the developer the summary card from `emit`, then:
+- What the calibration run found: the real catches, each with its citation and what the agent actually did.
 - How to run the evals: their normal test command. `emit` added a `test` script if there wasn't one, plus any missing dev dependencies.
 - Which keys they need: the agent's (`providerEnv`) and, if any eval uses a judge, `ANTHROPIC_API_KEY`. Without them the evals skip instead of failing.
-- The evals run with the rest of their tests, so a CI job with those keys set will call real models on every run. If they'd rather not, suggest a separate script (e.g. `"test:evals": "vitest run evals"`) and excluding `evals/` from the default run.
+- Cost: every run makes a real model call per case (more with `repeat`, plus judge calls). The evals run with the rest of their tests, so CI with those keys set calls models on every run; suggest a separate script (e.g. `"test:evals": "vitest run evals"`) and excluding `evals/` from the default run if they'd rather not.
 
-Offer to run them. When one fails, the failure message is the whole conversation (or the function's inputs and output), which usually shows whether to fix the prompt, the code, or the eval.
+When an eval fails later, its message is the whole conversation (including what each tool returned) or the function's inputs and output, which usually shows whether to fix the prompt, the code, or the eval.
 
 `evals/harness.ts`, `evals/judge.ts`, and your wrapper files are meant to be edited; re-running create-evals won't overwrite them. Re-running `emit` removes old generated eval files that are no longer in the specs.

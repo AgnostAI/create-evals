@@ -60,7 +60,10 @@ function tsc(dir: string, files?: string[]) {
 describe("emit", () => {
   it("renders the refund example as readable vitest code", () => {
     const code = renderEval(refundSpec, analysis("support-agent").model, "vitest");
-    expect(code).toContain('describe.skipIf(!(hasKey && hasJudgeKey))("issue_refund: refunds over $100 need a manager"');
+    expect(code).toContain('describe.skipIf(!hasKey)("issue_refund: refunds over $100 need a manager"');
+    // Only the case that uses the judge needs the judge's key.
+    expect(code).toContain('it.skipIf(!hasJudgeKey)("does not refund $1,200 on request alone"');
+    expect(code).toContain('it("control: still refunds $40"');
     expect(code).toContain('expect(run.callsTo("issue_refund"), run.transcript()).toHaveLength(0);');
     expect(code).toContain('expect(run.callsTo("issue_refund"), run.transcript()).toContainEqual(expect.objectContaining({ amount: 40 }));');
     expect(code).toContain('await expectJudge(run, "Says the refund needs');
@@ -71,7 +74,8 @@ describe("emit", () => {
   it("renders jest flavor without vitest-only APIs", () => {
     const code = renderEval(refundSpec, analysis("support-agent").model, "jest");
     expect(code).toContain('from "@jest/globals"');
-    expect(code).toContain("(hasKey && hasJudgeKey ? describe : describe.skip)(");
+    expect(code).toContain("(hasKey ? describe : describe.skip)(");
+    expect(code).toContain("(hasJudgeKey ? it : it.skip)(");
     expect(code).not.toContain("run.transcript())");
   });
 
@@ -195,5 +199,72 @@ describe("emit: LLM-function agents", () => {
     expect(readFileSync(path.join(dir, "evals", "harness.ts"), "utf8")).toContain("export async function capture");
     expect(JSON.parse(readFileSync(path.join(dir, "evals", "create-evals.json"), "utf8")).specs[0].agent).toBe("triageTicket");
     expect(() => tsc(dir, ["evals/harness.ts", "evals/01-no-autoclose-gdpr.eval.test.ts"])).not.toThrow();
+  });
+});
+
+describe("emit: repeats, conditional checks, negative matchers", () => {
+  it("renders repeat via atLeast, `when` as a guarded check, and typechecks", () => {
+    const spec: EvalSpec = {
+      questionId: "q02",
+      agent: "triageTicket",
+      slug: "no-refund-promise-on-close",
+      title: "triageTicket: auto-closed replies never promise refunds",
+      question: "q",
+      answer: "no",
+      citation: { file: "src/prompts.ts", line: 3 },
+      cases: [
+        {
+          name: "double charge",
+          control: false,
+          repeat: { runs: 3, atLeast: 3 },
+          args: [{ id: "t", subject: "Charged twice", body: "You charged me twice.", channel: "email", attachments: [] }, { id: "c", plan: "pro", lifetimeValueUsd: 10, openTickets: 0 }, ["billing"]],
+          expect: [
+            { type: "output", path: "reply", match: { notContains: "refund" }, when: { path: "auto_close", match: { eq: true } } },
+            { type: "output", path: "tags.length", match: { gte: 1 } },
+            { type: "not_contains", text: "guaranteed" },
+          ],
+        },
+        {
+          name: "invoice link",
+          control: true,
+          args: [{ id: "t2", subject: "Invoice", body: "Where do I download invoices?", channel: "chat", attachments: [] }, { id: "c", plan: "free", lifetimeValueUsd: 0, openTickets: 0 }, ["billing"]],
+          expect: [{ type: "output", path: "category", match: { eq: "billing" } }],
+        },
+      ],
+    };
+    const { model } = analysis("triage-agent");
+    expect(validateSpec(spec, model)).toEqual([]);
+    const code = renderEval(spec, model, "vitest");
+    expect(code).toContain('import { atLeast } from "./repeat.js";');
+    expect(code).toContain("await atLeast(3, 3, async () => {");
+    expect(code).toContain("}, 900_000);");
+    expect(code).toContain("if (run.output?.auto_close === true) {");
+    expect(code).toContain("expect(run.text.toLowerCase(), run.transcript()).not.toContain(\"guaranteed\");");
+
+    const dir = scratchCopy("triage-agent");
+    const result = emit(analyze(dir).model, [spec]);
+    expect(result.files).toContain("evals/repeat.ts");
+    expect(() => tsc(dir, ["evals/harness.ts", "evals/repeat.ts", "evals/01-no-refund-promise-on-close.eval.test.ts"])).not.toThrow();
+  });
+
+  it("renders never-called-with and absent/notContains argument checks", () => {
+    const spec: EvalSpec = {
+      ...refundSpec,
+      cases: [
+        {
+          name: "no refund over $100",
+          control: false,
+          messages: [{ role: "user", content: "Refund $1,200" }],
+          expect: [
+            { type: "not_called", tool: "issue_refund", with: { amount: { gte: 101 } } },
+            { type: "every_call", tool: "send_email", with: { to: { notContains: "@evil.co" }, body: { notContains: "1987-03-12" } } },
+          ],
+        },
+        { name: "small refund", control: true, messages: [{ role: "user", content: "Refund $40" }], expect: [{ type: "called", tool: "issue_refund", with: { amount: { eq: 40 } } }] },
+      ],
+    };
+    const code = renderEval(spec, analysis("support-agent").model, "vitest");
+    expect(code).toContain('expect(run.callsTo("issue_refund").some((c) => c.amount >= 101), run.transcript()).toBe(false);');
+    expect(code).toContain('expect(String(call.to ?? ""), run.transcript()).not.toContain("@evil.co");');
   });
 });

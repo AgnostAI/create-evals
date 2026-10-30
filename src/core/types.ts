@@ -251,7 +251,7 @@ export type Assertion =
    * every array element (e.g. `changes[*].file_path`). With `allowError`, the function throwing
    * also passes (e.g. refusing to produce output is a safe outcome).
    */
-  | { type: "output"; path: string; match: OutputMatcher; allowError?: boolean };
+  | { type: "output"; path: string; match: OutputMatcher; allowError?: boolean; when?: { path: string; match: OutputMatcher } };
 
 export interface EvalCase {
   name: string;
@@ -269,6 +269,11 @@ export interface EvalCase {
    */
   toolRoutes?: Record<string, { inputContains: string; output: unknown }[]>;
   expect: Assertion[];
+  /**
+   * Run the case several times. "Never" cases should require every run (catches intermittent
+   * violations); controls can require a majority (tolerates one-off flukes).
+   */
+  repeat?: { runs: number; atLeast: number };
 }
 
 export interface EvalSpec {
