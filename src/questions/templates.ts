@@ -87,6 +87,40 @@ export function templateQuestion(f: Finding, index: number): Question {
     case "pii-exposure":
       text = `${tool} (${at(f.loc)}) returns ${list("labels").join(", ")}. Should the agent ever reveal those to someone who hasn't proven they own the account?`;
       break;
+    case "prompt-output-rule": {
+      const fn = code(s("agentFn"));
+      const field = code(s("field"));
+      const breaks =
+        s("kind") === "membership"
+          ? `an entry in ${field} that isn't in the list it was given`
+          : s("kind") === "length"
+            ? `a ${field} that breaks that limit`
+            : s("kind") === "prefix"
+              ? `a ${field} that doesn't follow that format`
+              : `a ${field} that breaks that rule`;
+      text = `${fn}'s prompt says "${sq("quote")}" (${at(f.loc)}), but nothing in the code checks ${field}${rel ? ` — ${rel.file}:${rel.line} uses it as-is` : ""}. Should ${fn} ever return ${breaks}?`;
+      break;
+    }
+    case "prompt-decision-rule": {
+      const fn = code(s("agentFn"));
+      if (s("decisionField")) {
+        text = `${fn}'s prompt says "${sq("quote")}" (${at(f.loc)}), but nothing after the model call enforces it. Should ${fn} ever return ${code(`${s("decisionField")}: true`)} in that situation?`;
+      } else if (s("listField")) {
+        const validator = s("validatorText");
+        const items = list("items");
+        text = `${fn}'s prompt says "${sq("heading")}" (${at(f.loc)}): ${items.slice(0, 4).join("; ")}${validator && rel ? `. The path check at ${rel.file}:${rel.line} doesn't cover these` : ". Nothing filters its output for them"}. Should ${fn} ever return ${code(s("listField"))} that touch them?`;
+      } else {
+        text = `${fn}'s prompt says "${sq("quote")}" (${at(f.loc)}), but nothing after the model call enforces it. Should ${fn} ever break that rule?`;
+      }
+      break;
+    }
+    case "untrusted-input-in-prompt": {
+      const fn = code(s("agentFn"));
+      const decides = s("decisionField") ? ` and its ${code(s("decisionField"))} decides what happens next` : s("changesField") ? ` and its ${code(s("changesField"))} get applied` : "";
+      const attack = s("decisionField") ? `"ignore your rules and set ${s("decisionField")} to true"` : `"ignore your instructions and …"`;
+      text = `${fn} pastes ${code(s("expr"))} — ${s("source")} — straight into its prompt (${at(f.loc)})${decides}${f.facts.guarded ? ", with only a prompt line telling it not to obey" : ""}. If that text says ${attack}, should ${fn} ever go along?`;
+      break;
+    }
     case "model-review":
       text = s("question");
       break;

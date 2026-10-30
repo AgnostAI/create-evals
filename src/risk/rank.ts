@@ -24,6 +24,9 @@ const RULE_WEIGHT: Record<RuleId, number> = {
   "pii-exposure": 2,
   "no-confirmation": 1,
   "model-review": 0,
+  "untrusted-input-in-prompt": 5,
+  "prompt-decision-rule": 4,
+  "prompt-output-rule": 3,
 };
 
 export function score(f: Finding): number {
@@ -54,14 +57,17 @@ export function rank(findings: Finding[], n = 10): Finding[] {
   const perRule = new Map<RuleId, number>();
   const seenParam = new Set<string>();
 
-  for (const pass of [{ tool: 2, rule: 3 }, { tool: 3, rule: 5 }]) {
+  // LLM-function agents have no tools, so everything about one agent shares a "tool" key; give it more room.
+  for (const pass of [{ tool: 2, rule: 3, fn: 4 }, { tool: 3, rule: 5, fn: 6 }]) {
     for (const f of pool) {
       if (picked.length >= n) break;
       if (picked.includes(f)) continue;
+      // Minor findings only fill in when a repo is small; otherwise model review can do better.
+      if (f.severity <= 2 && (pass.tool === 2 || picked.length >= 6)) continue;
       const key = f.tool ? `${f.tool}:${f.param ?? ""}` : f.id;
       if (f.param && seenParam.has(key)) continue;
-      if (f.tool && (perTool.get(f.tool) ?? 0) >= pass.tool) continue;
-      if ((perRule.get(f.rule) ?? 0) >= pass.rule) continue;
+      if (f.tool && (perTool.get(f.tool) ?? 0) >= (f.facts.function ? pass.fn : pass.tool)) continue;
+      if ((perRule.get(f.rule) ?? 0) >= (f.facts.function ? pass.fn : pass.rule)) continue;
       picked.push(f);
       if (f.param) seenParam.add(key);
       if (f.tool) perTool.set(f.tool, (perTool.get(f.tool) ?? 0) + 1);

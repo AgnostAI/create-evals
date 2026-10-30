@@ -36,7 +36,7 @@ npx create-evals
 
 Then run `npm test`.
 
-Supports TypeScript agents built on the **Vercel AI SDK**, **OpenAI Agents SDK**, and **Mastra**. Writes **vitest** or **jest** tests, matching whatever you already use (vitest if you have neither). Python is next.
+Supports TypeScript tool-calling agents built on the **Vercel AI SDK**, **OpenAI Agents SDK**, and **Mastra**, and **LLM functions**: exported functions that call the `openai` or `@anthropic-ai/sdk` client with a system prompt and return structured output, such as classifiers, triage, and "should we proceed?" decision agents. Writes **vitest** or **jest** tests, matching whatever you already use (vitest if you have neither). Python is next.
 
 ## What you get
 
@@ -90,7 +90,7 @@ Each eval runs your real agent and model. **Tools are recorded, never executed**
 Generic questions ("Should your agent be polite?") are the failure mode of every tool like this, so the pipeline is built to make them impossible:
 
 1. **Scan, without an LLM.** [ts-morph](https://ts-morph.com) parses your repo to find the agent, its system prompt (with real line numbers), and every tool. For each tool it reads the zod params and their bounds, the handler's calls (`payments.refund`, `execSync`, `fetch(url, { method: "PUT" })`), the fields it returns, and whether it has an approval step.
-2. **Risk rules, also without an LLM.** Eleven rules each produce a finding with a `file:line` taken from the syntax tree:
+2. **Risk rules, also without an LLM.** Fourteen rules each produce a finding with a `file:line` taken from the syntax tree:
 
    | Rule | Example it catches |
    |---|---|
@@ -104,16 +104,19 @@ Generic questions ("Should your agent be polite?") are the failure mode of every
    | unrestricted file path | `write_file` can write `.env` and `.git/hooks` |
    | returns personal data | `lookup_customer` returns date of birth and card last 4 |
    | description promises less than the code allows | "read-only SQL query" that runs any SQL |
+   | *LLM functions:* prompt rule with no check in code | "Never auto-close when the customer mentions a chargeback"; nothing after the model call checks `auto_close` |
+   | *LLM functions:* prompt rule on an output nothing checks | "tags must come from the allowed list"; `apply.ts` uses `tags` as-is (rules the code *does* enforce, like a `.slice(0, 1200)` length cap, aren't flagged) |
+   | *LLM functions:* untrusted text pasted into the prompt | `${ticket.body}` goes into a prompt whose `auto_close` is applied automatically |
 
 3. **Rank.** Findings are ranked by severity, irreversibility, and how specific a question they'd make. Rank keeps at most two per tool (three in small repos) and drops near-duplicates. When a small repo yields fewer than 10, a model reviews the code for more, and its proposals have to pass the same citation checks.
 4. **Word.** An LLM rewrites each question for flow. Its only inputs are findings and their citations, so it can't invent one.
 5. **Validate.** A question is dropped if its citation isn't a real line belonging to its finding, if it doesn't name an identifier from your code, or if it's a near-duplicate. A rejected rewrite falls back to the deterministic template, so wording never gets less grounded. **Nine good questions beat ten padded ones.**
 
-The test suite runs a **swap test** on three fixture agents: every question must name something that exists in its own repo and in neither of the other two.
+The test suite runs a **swap test** on the four fixture agents: every question must name something that exists in its own repo and in none of the others.
 
 ## Does it work?
 
-[`fixtures/`](fixtures) has three small agents with risks planted on purpose: a support agent on the Vercel AI SDK, a coding agent on the OpenAI Agents SDK, and a growth-ops agent on Mastra. The scanner finds every planted risk at its exact line, which [`expected.json`](fixtures/support-agent/expected.json) checks in CI.
+[`fixtures/`](fixtures) has four small agents with risks planted on purpose: a support agent on the Vercel AI SDK, a coding agent on the OpenAI Agents SDK, a growth-ops agent on Mastra, and a ticket-triage LLM function on the Anthropic SDK. The scanner finds every planted risk at its exact line, which [`expected.json`](fixtures/support-agent/expected.json) checks in CI.
 
 Answering "no" to all 10 questions on the support agent and running `npm test`:
 
@@ -156,11 +159,11 @@ npx create-evals skill [--agents]    # install the skill / AGENTS.md section
 
 ```bash
 npm test               # scanner, rules, validator, emitter, CLI — no API key
-npm run test:e2e       # writes + runs evals on all three fixtures (needs ANTHROPIC_API_KEY)
+npm run test:e2e       # writes + runs evals on all four fixtures (needs ANTHROPIC_API_KEY)
 npm run demo           # re-records docs/demo.svg from a real run
 ```
 
-Adding a framework means a new adapter in `src/scan/adapters/` and a harness branch in `src/emit/harness.ts`. Rules, ranking, questions, and specs work on the framework-agnostic model in `src/core/types.ts`, which is also where Python support will plug in.
+Adding a framework means a new adapter in `src/scan/adapters/` and a harness branch in `src/emit/harness.ts` (LLM functions need no harness changes: `capture()` calls any exported async function). Rules, ranking, questions, and specs work on the framework-agnostic model in `src/core/types.ts`, which is also where Python support will plug in.
 
 ---
 

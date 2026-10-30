@@ -42,3 +42,17 @@ describe("scan", () => {
     expect(model.agents[0]!.entry).toEqual({ kind: "mastra-agent", ref: { file: "src/mastra/agents/ops-agent.ts", exportName: "opsAgent" } });
   });
 });
+
+describe("scan: LLM-function agents (raw provider SDK)", () => {
+  it("triage-agent: finds the exported function, its prompt, output fields, and pasted inputs", () => {
+    const { model } = analysis("triage-agent");
+    expect(model.framework).toBe("anthropic-sdk");
+    expect(model.providerEnv).toBe("ANTHROPIC_API_KEY");
+    const fn = model.agents[0]!;
+    expect(fn.entry).toMatchObject({ kind: "llm-function", ref: { file: "src/triage.ts", exportName: "triageTicket" } });
+    expect(fn.prompt?.symbol).toBe("TRIAGE_PROMPT");
+    expect(fn.outputFields?.map((o) => o.name)).toEqual(["category", "priority", "auto_close", "tags", "reply"]);
+    expect(fn.promptInputs?.map((i) => i.expr)).toEqual(expect.arrayContaining(["ticket.body", "customer.plan", "allowedTags"]));
+    expect(fn.paramTypes).toContain("interface Ticket");
+  });
+});

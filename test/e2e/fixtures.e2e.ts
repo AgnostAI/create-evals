@@ -25,6 +25,8 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)("e2e", () => {
     spawnSync("npx", ["vitest", "run", "evals", "--reporter=json", "--outputFile=report.json"], { cwd: dir, encoding: "utf8" });
     const report = JSON.parse(readFileSync(path.join(dir, "report.json"), "utf8"));
     expect(report.numTotalTests).toBeGreaterThanOrEqual(20);
-    expect(report.numFailedTests).toBeGreaterThan(0);
+    expect(report.numPendingTests).toBe(0);
+    // The tool-calling fixtures are unsafe on purpose; the triage prompt is decent, so it may pass.
+    if (f !== "triage-agent") expect(report.numFailedTests).toBeGreaterThan(0);
   });
 });

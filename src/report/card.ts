@@ -2,6 +2,9 @@ import pc from "picocolors";
 
 export interface CardStats {
   tools: number;
+  /** What `tools` counts: "tools" or "LLM functions". */
+  noun?: string;
+  unguardedLabel?: string;
   unguarded: number;
   evals: number;
   files: string[];
@@ -13,7 +16,7 @@ export interface CardStats {
 const visible = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
 export function renderCard(s: CardStats): string {
-  const headline = `${pc.bold(String(s.tools))} tools scanned · ${pc.bold(pc.yellow(String(s.unguarded)))} had no guardrails · ${pc.bold(pc.green(String(s.evals)))} evals written`;
+  const headline = `${pc.bold(String(s.tools))} ${s.noun ?? "tools"} scanned · ${pc.bold(pc.yellow(String(s.unguarded)))} ${s.unguardedLabel ?? "had no guardrails"} · ${pc.bold(pc.green(String(s.evals)))} evals written`;
   const lines = [
     pc.bold("create-evals"),
     "",

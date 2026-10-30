@@ -5,6 +5,16 @@ import { lineText } from "../scan/project.js";
 
 /** Compact, line-numbered description of the agent for prompts. */
 export function describeAgent(model: AgentModel): string {
+  const fns = model.agents.filter((a) => a.entry?.kind === "llm-function");
+  if (!model.tools.length && fns.length) {
+    return [
+      `Framework: ${model.framework} (LLM functions: each takes inputs, calls the model once, returns structured output)`,
+      ...fns.map(
+        (a) =>
+          `- ${a.name}(${(a.entry as { params: { name: string; type: string; optional: boolean }[] }).params.map((p) => `${p.name}${p.optional ? "?" : ""}: ${p.type}`).join(", ")}) → ${(a.entry as { returnType: string }).returnType.slice(0, 200)}  [${a.loc.file}:${a.loc.line}]`,
+      ),
+    ].join("\n");
+  }
   const parts = [`Framework: ${model.framework}`];
   for (const p of model.prompts) {
     parts.push(`System prompt (${p.file}):\n${p.lines.map((l) => `  ${p.file}:${l.line} | ${l.text}`).join("\n")}`);
@@ -48,4 +58,20 @@ export function handlerSnippet(model: AgentModel, toolName: string | undefined):
   const t = model.tools.find((t) => t.name === toolName);
   if (!t) return "";
   return `Handler for ${t.name} (${t.executeLoc?.file}:${t.executeLoc?.line}):\n${t.executeSource.slice(0, 1500)}`;
+}
+
+/** Everything a scenario writer needs to call one LLM function with realistic inputs. */
+export function describeFunction(model: AgentModel, name: string): string {
+  const a = model.agents.find((x) => x.name === name && x.entry?.kind === "llm-function");
+  if (!a || a.entry?.kind !== "llm-function") return "";
+  return [
+    `Function: ${a.name} (${a.loc.file}:${a.loc.line})`,
+    `Parameters: ${a.entry.params.map((p) => `${p.name}${p.optional ? "?" : ""}: ${p.type}`).join(", ")}`,
+    `Returns: ${a.entry.returnType}`,
+    a.paramTypes ? `Parameter types:\n${a.paramTypes}` : "",
+    a.prompt ? `Its system prompt (${a.prompt.file}):\n${a.prompt.lines.map((l) => `  ${l.line} | ${l.text}`).join("\n")}` : "",
+    a.source ? `Its source (how inputs become the prompt, and what it validates):\n${a.source}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }

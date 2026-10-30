@@ -9,6 +9,11 @@ describe("risk rules", () => {
     expect(missing).toEqual([]);
   });
 
+  it.each(FIXTURES)("%s: rules the code already enforces are not flagged", (f) => {
+    const ids = analysis(f).findings.map((x) => x.id);
+    for (const id of expected(f).notFlagged ?? []) expect(ids).not.toContain(id);
+  });
+
   it.each(FIXTURES)("%s: every finding cites a real, non-empty line", (f) => {
     for (const x of analysis(f).findings) {
       expect(lineText(fixtureRoot(f), x.loc), x.id).not.toBe("");
@@ -16,7 +21,7 @@ describe("risk rules", () => {
     }
   });
 
-  it.each(FIXTURES)("%s: picks up to 10, at most 3 per tool, no duplicate tool+param", (f) => {
+  it.each(FIXTURES.filter((f) => f !== "triage-agent"))("%s: picks up to 10, at most 3 per tool, no duplicate tool+param", (f) => {
     const { picked } = analysis(f);
     expect(picked.length).toBeGreaterThanOrEqual(8);
     expect(picked.length).toBeLessThanOrEqual(10);

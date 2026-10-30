@@ -2,7 +2,7 @@
 // read it, emitters consume it. Adding Python later means a new scanner + emitter;
 // nothing in risk/ or questions/ should need to change.
 
-export type Framework = "vercel-ai" | "openai-agents" | "mastra";
+export type Framework = "vercel-ai" | "openai-agents" | "mastra" | "openai-sdk" | "anthropic-sdk";
 export type TestRunner = "vitest" | "jest";
 
 /** A 1-based line in a file, path relative to the repo root (always forward slashes). */
@@ -85,7 +85,35 @@ export type AgentEntry =
   /** An exported `new Agent()` from @openai/agents. */
   | { kind: "openai-agent"; ref: ImportRef }
   /** An exported `new Agent()` from @mastra/core. */
-  | { kind: "mastra-agent"; ref: ImportRef };
+  | { kind: "mastra-agent"; ref: ImportRef }
+  /**
+   * An exported function that calls an LLM and returns something structured, e.g.
+   * `runPMAgent(contextBundle, alertPayload)`. Evals call it with generated inputs.
+   */
+  | { kind: "llm-function"; ref: ImportRef; params: FunctionParam[]; returnType: string };
+
+export interface FunctionParam {
+  name: string;
+  type: string;
+  optional: boolean;
+}
+
+/** A field the prompt tells the model to output, e.g. `"should_proceed": true`. */
+export interface OutputField {
+  name: string;
+  /** Example value as written in the prompt's schema, e.g. `true`, `"critical|high"`. */
+  example: string;
+  loc: SourceLoc;
+  /** Code lines outside the prompt that read this field, used to tell if a rule is enforced. */
+  codeRefs: { loc: SourceLoc; text: string }[];
+}
+
+/** A function input interpolated into the prompt, e.g. `${alertPayload.trigger_data.context_rows}`. */
+export interface PromptInput {
+  expr: string;
+  param: string;
+  loc: SourceLoc;
+}
 
 export interface AgentDef {
   name: string;
@@ -98,6 +126,14 @@ export interface AgentDef {
   entry?: AgentEntry;
   /** How the tools object is reachable when it isn't via the agent itself. */
   toolsRef?: ImportRef;
+  /** For llm-function agents: what the prompt says to output. */
+  outputFields?: OutputField[];
+  /** For llm-function agents: inputs pasted into the prompt. */
+  promptInputs?: PromptInput[];
+  /** For llm-function agents: declarations of the parameter types, for writing realistic inputs. */
+  paramTypes?: string;
+  /** For llm-function agents: the function's source, so scenario writers see how inputs reach the prompt. */
+  source?: string;
 }
 
 export interface AgentModel {
@@ -130,6 +166,9 @@ export type RuleId =
   | "pii-exposure"
   | "description-mismatch"
   | "prompt-autonomy-conflict"
+  | "prompt-output-rule"
+  | "prompt-decision-rule"
+  | "untrusted-input-in-prompt"
   /** Proposed by a model reviewing the code; still has to pass the same citation checks. */
   | "model-review";
 
@@ -174,19 +213,39 @@ export interface AnsweredQuestion extends Question {
 
 export type ArgMatcher = { eq?: string | number | boolean; lte?: number; gte?: number; contains?: string };
 
+export type OutputMatcher = {
+  eq?: string | number | boolean | null;
+  contains?: string;
+  notContains?: string;
+  startsWith?: string;
+  maxLength?: number;
+  lte?: number;
+  gte?: number;
+  oneOf?: (string | number | boolean)[];
+};
+
 export type Assertion =
   | { type: "not_called"; tool: string }
   | { type: "called"; tool: string; with?: Record<string, ArgMatcher> }
   | { type: "max_calls"; tool: string; max: number }
   | { type: "every_call"; tool: string; with: Record<string, ArgMatcher> }
   | { type: "not_contains"; text: string }
-  | { type: "judge"; criterion: string };
+  | { type: "judge"; criterion: string }
+  /**
+   * For llm-function agents: a check on the returned value. `path` is dotted, with `[*]` for
+   * every array element (e.g. `changes[*].file_path`). With `allowError`, the function throwing
+   * also passes (e.g. refusing to produce output is a safe outcome).
+   */
+  | { type: "output"; path: string; match: OutputMatcher; allowError?: boolean };
 
 export interface EvalCase {
   name: string;
   /** Control cases check the agent still does the safe thing, so a do-nothing agent can't pass. */
   control: boolean;
-  messages: { role: "user" | "assistant"; content: string }[];
+  /** For conversational agents. */
+  messages?: { role: "user" | "assistant"; content: string }[];
+  /** For llm-function agents: the arguments to call the function with. */
+  args?: unknown[];
   /** Fake results for tools during this case. Tools not listed return the harness default. */
   toolOutputs?: Record<string, unknown>;
   /**
@@ -199,6 +258,8 @@ export interface EvalCase {
 
 export interface EvalSpec {
   questionId: string;
+  /** For llm-function agents: which exported function this eval calls. */
+  agent?: string;
   slug: string;
   title: string;
   question: string;

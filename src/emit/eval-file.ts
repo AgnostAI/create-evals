@@ -1,4 +1,5 @@
-import type { AgentModel, ArgMatcher, Assertion, EvalCase, EvalSpec, TestRunner } from "../core/types.js";
+import type { AgentModel, ArgMatcher, Assertion, EvalCase, EvalSpec, ImportRef, TestRunner } from "../core/types.js";
+import { importPath } from "./harness.js";
 import { slugify } from "../evals/spec.js";
 
 const str = (s: string) => JSON.stringify(s);
@@ -15,7 +16,7 @@ export function renderJudge(model: AgentModel): string {
 import { generateText, Output } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
-import type { Run } from "./harness${model.importExtension}";
+type Run = { transcript(): string };
 
 const env = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env ?? {};
 const model = anthropic(env.CREATE_EVALS_JUDGE_MODEL ?? "claude-opus-5-5");
@@ -56,6 +57,19 @@ export function renderEval(spec: EvalSpec, model: AgentModel, runner: TestRunner
     `// A: ${spec.answer}`,
   ].join("\n");
 
+  const fn = spec.agent ? model.agents.find((a) => a.name === spec.agent && a.entry?.kind === "llm-function") : undefined;
+  if (fn) {
+    return `${header}
+${imports}
+import { ${fn.name} } from "${importPath(model, (fn.entry as { ref: ImportRef }).ref)}";
+import { capture, hasKey${spec.cases.some((c) => c.expect.some((a) => a.type === "output" && a.path.includes("[*]"))) ? ", pluck" : ""} } from "./harness${ext}";
+${usesJudge ? `import { expectJudge } from "./judge${ext}";\n` : ""}
+${describeCall}(${str(spec.title)}, () => {
+${spec.cases.map((c) => renderFunctionCase(c, fn.name, runner)).join("\n\n")}
+});
+`;
+  }
+
   return `${header}
 ${imports}
 import { runAgent, hasKey${spec.cases.some((c) => c.toolRoutes && Object.keys(c.toolRoutes).length) ? ", route" : ""} } from "./harness${ext}";
@@ -66,12 +80,73 @@ ${spec.cases.map((c) => renderCase(c, runner)).join("\n\n")}
 `;
 }
 
+function caseName(c: EvalCase) {
+  return c.control ? (c.name.startsWith("control") ? c.name : `control: ${c.name}`) : c.name;
+}
+
+function renderFunctionCase(c: EvalCase, fnName: string, runner: TestRunner): string {
+  const msg = runner === "vitest" ? ", run.transcript()" : "";
+  const args = (c.args ?? []).map((a) => `      ${indent(JSON.stringify(a, null, 2), 6)},`).join("\n");
+  const lines: string[] = [];
+  const outputs = c.expect.filter((a): a is Extract<Assertion, { type: "output" }> => a.type === "output");
+  // Unless every check accepts a refusal, the function has to actually return.
+  if (outputs.some((a) => !a.allowError) || !outputs.length) lines.push(`expect(run.error?.message${msg}).toBeUndefined();`);
+  for (const a of c.expect) {
+    if (a.type === "judge") lines.push(`await expectJudge(run, ${str(a.criterion)});`);
+    else if (a.type === "output") {
+      const check = renderOutputCheck(a, msg);
+      lines.push(a.allowError ? `if (!run.error) {\n${indent(check, 2, true)}\n}` : check);
+    }
+  }
+  return `  it(${str(caseName(c))}, async () => {
+    const run = await capture(${fnName}, [
+${args}
+    ] as unknown as Parameters<typeof ${fnName}>);
+
+${indent(lines.join("\n"), 4, true)}
+  }, 300_000);`;
+}
+
+function renderOutputCheck(a: Extract<Assertion, { type: "output" }>, msg: string): string {
+  const m = a.match;
+  const one = (v: string) => {
+    if (m.eq !== undefined) return m.eq === null ? `expect(${v}${msg}).toBeNull();` : `expect(${v}${msg}).toBe(${JSON.stringify(m.eq)});`;
+    if (m.contains !== undefined) return `expect(String(${v})${msg}).toContain(${str(m.contains)});`;
+    if (m.notContains !== undefined) return `expect(String(${v})${msg}).not.toContain(${str(m.notContains)});`;
+    if (m.startsWith !== undefined) return `expect(String(${v}).startsWith(${str(m.startsWith)})${msg}).toBe(true);`;
+    if (m.maxLength !== undefined) return `expect(String(${v}).length${msg}).toBeLessThanOrEqual(${m.maxLength});`;
+    if (m.lte !== undefined) return `expect(${v}${msg}).toBeLessThanOrEqual(${m.lte});`;
+    if (m.gte !== undefined) return `expect(${v}${msg}).toBeGreaterThanOrEqual(${m.gte});`;
+    if (m.oneOf !== undefined) return `expect(${JSON.stringify(m.oneOf)}${msg}).toContain(${v});`;
+    return `expect(${v}${msg}).toBeDefined();`;
+  };
+  if (!a.path.includes("[*]")) return one(`run.output${optionalChain(a.path)}`);
+  return `for (const value of pluck(run.output, ${str(a.path)})) {\n  ${one("value")}\n}`;
+}
+
+/** `analysis.should_proceed` → `?.analysis?.should_proceed` */
+function optionalChain(path: string): string {
+  return path
+    .split(".")
+    .filter(Boolean)
+    .map((seg) => {
+      // `changes[0]` → `?.changes?.[0]`
+      const m = /^([^[\]]*)((?:\[\d+\])*)$/.exec(seg);
+      if (!m) return `?.[${str(seg)}]`;
+      const name = m[1] ? (IDENT.test(m[1]) ? `?.${m[1]}` : `?.[${str(m[1])}]`) : "";
+      const idx = [...m[2]!.matchAll(/\[(\d+)\]/g)].map((x) => `?.[${x[1]}]`).join("");
+      return name + idx;
+    })
+    .join("");
+}
+
 function renderCase(c: EvalCase, runner: TestRunner): string {
-  const name = c.control ? (c.name.startsWith("control") ? c.name : `control: ${c.name}`) : c.name;
+  const name = caseName(c);
+  const messages = c.messages ?? [];
   const input =
-    c.messages.length === 1 && c.messages[0]!.role === "user"
-      ? str(c.messages[0]!.content)
-      : `[\n${c.messages.map((m) => `      { role: "${m.role}", content: ${str(m.content)} },`).join("\n")}\n    ]`;
+    messages.length === 1 && messages[0]!.role === "user"
+      ? str(messages[0]!.content)
+      : `[\n${messages.map((m) => `      { role: "${m.role}", content: ${str(m.content)} },`).join("\n")}\n    ]`;
   const outputs = renderOutputs(c);
   // Vitest prints a custom message on failure; showing the conversation makes failures debuggable.
   const body = c.expect.map((a) => renderAssertion(a, runner === "vitest" ? ", run.transcript()" : "")).join("\n");
@@ -122,6 +197,8 @@ function renderAssertion(a: Assertion, msg: string): string {
       return `expect(run.text.toLowerCase()${msg}).not.toContain(${str(a.text.toLowerCase())});`;
     case "judge":
       return `await expectJudge(run, ${str(a.criterion)});`;
+    case "output":
+      return renderOutputCheck(a, msg);
   }
 }
 

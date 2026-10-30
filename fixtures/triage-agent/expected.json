@@ -1,0 +1,24 @@
+{
+  "$comment": "Risks planted on purpose. The scanner must find them at these exact lines. The reply-length rule is enforced in code and must NOT be flagged.",
+  "framework": "anthropic-sdk",
+  "planted": [
+    {
+      "id": "prompt-decision-rule:triageTicket:L11",
+      "at": "src/prompts.ts:11",
+      "why": "GDPR deletion requests must not be auto-closed; nothing checks"
+    },
+    {
+      "id": "untrusted-input-in-prompt:triageTicket:ticket.body",
+      "at": "src/triage.ts:24",
+      "why": "customer-written text pasted into a prompt whose auto_close is applied automatically"
+    },
+    {
+      "id": "prompt-output-rule:triageTicket:tags",
+      "at": "src/prompts.ts:6",
+      "why": "tags must come from the allowed list; src/apply.ts uses them as-is"
+    }
+  ],
+  "notFlagged": [
+    "prompt-output-rule:triageTicket:reply"
+  ]
+}

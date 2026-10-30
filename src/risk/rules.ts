@@ -1,5 +1,6 @@
 import type { AgentModel, Finding, PromptLine, RuleId, SourceLoc, ToolDef, ToolParam } from "../core/types.js";
 import { lineText } from "../scan/project.js";
+import { functionRules } from "./function-rules.js";
 import { effectOf, isExecSink, isFsRead, isFsWrite, PII_FIELDS, words, type Effect } from "./effects.js";
 
 type Draft = Omit<Finding, "id" | "evidence" | "symbols"> & { symbols?: string[] };
@@ -29,7 +30,9 @@ export function runRules(model: AgentModel): Finding[] {
     const effect = effects.get(tool.name)!;
     drafts.push(...toolRules(tool, effect, { dangerous, piiTools, promptLines, model }));
   }
-  drafts.push(...promptRules(model, promptLines, effects));
+  // Tool-level prompt rules only make sense for tool-calling agents.
+  if (model.tools.length) drafts.push(...promptRules(model, promptLines, effects));
+  drafts.push(...functionRules(model));
 
   return dedupeIds(drafts.map((d) => finalize(model, d)));
 }
@@ -364,4 +367,7 @@ export const RULE_LABELS: Record<RuleId, string> = {
   "description-mismatch": "description promises less than the code allows",
   "prompt-autonomy-conflict": "prompt pushes autonomy over caution",
   "model-review": "found by model review",
+  "prompt-output-rule": "prompt rule on an output nothing checks",
+  "prompt-decision-rule": "prompt rule with no check in code",
+  "untrusted-input-in-prompt": "untrusted text pasted into the prompt",
 };

@@ -1,13 +1,15 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { AgentModel, Framework, TestRunner } from "../core/types.js";
+import { llmSdk } from "./adapters/llm-sdk.js";
 import { mastra } from "./adapters/mastra.js";
 import { openaiAgents } from "./adapters/openai-agents.js";
 import type { Adapter } from "./adapters/types.js";
 import { vercelAi } from "./adapters/vercel-ai.js";
 import { loadProject, readJson } from "./project.js";
 
-export const ADAPTERS: Adapter[] = [mastra, openaiAgents, vercelAi];
+// Order matters for ties: framework adapters before the raw-SDK fallback.
+export const ADAPTERS: Adapter[] = [mastra, openaiAgents, vercelAi, llmSdk];
 
 interface PackageJson {
   dependencies?: Record<string, string>;
@@ -25,28 +27,31 @@ export function scan(root: string): AgentModel {
   const ctx = loadProject(root);
   // Several frameworks can coexist (e.g. Mastra apps also depend on AI SDK providers).
   // The one that defines the most tools wins.
+  // A tool-calling agent beats a bare LLM function when both exist.
   const results = ADAPTERS.filter((a) => a.packages.some((p) => p in deps)).map((a) => ({ adapter: a, ...a.scan(ctx) }));
-  const best = results.sort((a, b) => b.tools.length - a.tools.length)[0];
-  if (!best || best.tools.length === 0) {
+  const weight = (r: (typeof results)[number]) => r.tools.length * 10 + r.agents.filter((x) => x.entry?.kind === "llm-function" && x.prompt).length;
+  const best = results.sort((a, b) => weight(b) - weight(a))[0];
+  if (!best || weight(best) === 0) {
     throw new ScanError(
-      "Couldn't find any agent tools. create-evals v1 supports the Vercel AI SDK (`tool()`), OpenAI Agents SDK (`tool()`), and Mastra (`createTool()`).",
+      "Couldn't find an agent. create-evals supports the Vercel AI SDK, OpenAI Agents SDK, and Mastra (tool-calling agents), and exported functions that call the openai or @anthropic-ai/sdk client with a system prompt.",
     );
   }
 
+  const framework = best.agents[0]?.framework ?? best.adapter.framework;
   const prompts = best.agents.flatMap((a) => (a.prompt ? [a.prompt] : []));
   const modelText = best.agents.map((a) => a.model ?? "").join(" ");
 
   return {
     root,
-    framework: best.adapter.framework,
+    framework,
     runner: detectRunner(pkg),
     importExtension: detectImportExtension(ctx.files.map((f) => f.getText())),
     packageManager: detectPackageManager(root),
     dependencies: deps,
-    agents: best.agents,
+    agents: best.agents.filter((a) => a.entry?.kind !== "llm-function" || a.prompt),
     tools: best.tools,
     prompts,
-    providerEnv: providerEnv(best.adapter.framework, modelText),
+    providerEnv: providerEnv(framework, modelText),
   };
 }
 
@@ -78,6 +83,8 @@ function detectPackageManager(root: string): AgentModel["packageManager"] {
 }
 
 function providerEnv(framework: Framework, model: string): string {
+  if (framework === "openai-sdk") return "OPENAI_API_KEY";
+  if (framework === "anthropic-sdk") return "ANTHROPIC_API_KEY";
   if (/anthropic|claude/i.test(model)) return "ANTHROPIC_API_KEY";
   if (/google|gemini/i.test(model)) return "GOOGLE_GENERATIVE_AI_API_KEY";
   if (/openai|gpt-|o\d/i.test(model)) return "OPENAI_API_KEY";

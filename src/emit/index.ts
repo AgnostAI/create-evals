@@ -54,7 +54,8 @@ export function emit(model: AgentModel, specs: EvalSpec[], opts: EmitOptions = {
     "create-evals.json",
     JSON.stringify(
       {
-        $comment: "Written by create-evals. The questions you answered and the evals they became. Re-run `npx create-evals` to add more.",
+        $comment:
+          "Written by create-evals: the questions you answered and the eval specs they became. Edit a spec and run `npx create-evals emit evals/create-evals.json` to re-render the tests.",
         generatedAt: new Date().toISOString(),
         framework: model.framework,
         evals: specs.map((s, i) => ({
@@ -64,6 +65,7 @@ export function emit(model: AgentModel, specs: EvalSpec[], opts: EmitOptions = {
           citation: `${s.citation.file}:${s.citation.line}`,
           finding: opts.questions?.find((q) => q.id === s.questionId)?.findingId,
         })),
+        specs,
       },
       null,
       2,

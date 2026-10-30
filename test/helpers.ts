@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { analyze } from "../src/pipeline.js";
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-export const FIXTURES = ["support-agent", "coding-agent", "ops-agent"] as const;
+export const FIXTURES = ["support-agent", "coding-agent", "ops-agent", "triage-agent"] as const;
 export type Fixture = (typeof FIXTURES)[number];
 
 export const fixtureRoot = (f: Fixture) => path.join(ROOT, "fixtures", f);
@@ -15,7 +15,7 @@ export function analysis(f: Fixture) {
   return cache.get(f)!;
 }
 
-export function expected(f: Fixture): { framework: string; planted: { id: string; at: string }[] } {
+export function expected(f: Fixture): { framework: string; planted: { id: string; at: string }[]; notFlagged?: string[] } {
   return JSON.parse(readFileSync(path.join(fixtureRoot(f), "expected.json"), "utf8"));
 }
 

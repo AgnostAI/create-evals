@@ -20,7 +20,13 @@ import { RULE_LABELS } from "./risk/rules.js";
 import { ScanError } from "./scan/index.js";
 
 const VERSION = "0.1.0";
-const FRAMEWORK_NAMES = { "vercel-ai": "Vercel AI SDK", "openai-agents": "OpenAI Agents SDK", mastra: "Mastra" } as const;
+const FRAMEWORK_NAMES = {
+  "vercel-ai": "Vercel AI SDK",
+  "openai-agents": "OpenAI Agents SDK",
+  mastra: "Mastra",
+  "openai-sdk": "OpenAI SDK",
+  "anthropic-sdk": "Anthropic SDK",
+} as const;
 
 const HELP = `${pc.bold("create-evals")} — reads your agent's code, asks 10 yes/no questions, writes 10 runnable evals.
 
@@ -190,8 +196,10 @@ async function cmdInteractive(root: string, flags: Flags) {
     throw e;
   }
   const promptLines = a.model.prompts.reduce((n, pr) => n + pr.lines.length, 0);
+  const fnCount = a.model.agents.filter((x) => x.entry?.kind === "llm-function").length;
+  const shape = a.model.tools.length ? `${a.model.tools.length} tools` : `${fnCount} LLM function${fnCount === 1 ? "" : "s"}`;
   s.stop(
-    `${pc.bold(FRAMEWORK_NAMES[a.model.framework])} · ${a.model.tools.length} tools · ${a.model.prompts.length} system prompt${a.model.prompts.length === 1 ? "" : "s"} (${promptLines} lines) · ${a.model.runner ?? "no test runner yet"}`,
+    `${pc.bold(FRAMEWORK_NAMES[a.model.framework])} · ${shape} · ${a.model.prompts.length} system prompt${a.model.prompts.length === 1 ? "" : "s"} (${promptLines} lines) · ${a.model.runner ?? "no test runner yet"}`,
   );
 
   let llm;
@@ -275,7 +283,9 @@ function writeEvals(model: ReturnType<typeof analyze>["model"], specs: EvalSpec[
       s.start(`Installing ${result.addedDeps.join(", ")}`);
       const r = spawnSync(model.packageManager, ["install"], { cwd: model.root, encoding: "utf8", shell: process.platform === "win32" });
       if (r.status === 0) s.stop(`Installed ${result.addedDeps.join(", ")}`);
-      else s.error(`Install failed; run \`${model.packageManager} install\` yourself`);
+      else if ((r.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+        s.error(`This repo uses ${model.packageManager} (from its lockfile), but ${model.packageManager} isn't installed. Added ${result.addedDeps.join(", ")} to package.json; run \`${model.packageManager} install\`.`);
+      } else s.error(`\`${model.packageManager} install\` failed; run it yourself to finish adding ${result.addedDeps.join(", ")}`);
     } else {
       p.log.info(`Added ${result.addedDeps.join(", ")} to devDependencies. Run \`${model.packageManager} install\`.`);
     }
@@ -285,11 +295,15 @@ function writeEvals(model: ReturnType<typeof analyze>["model"], specs: EvalSpec[
 
 function printFinish(a: { model: ReturnType<typeof analyze>["model"]; findings: Finding[] }, files: string[], envVar: string) {
   const runCommand = a.model.packageManager === "npm" ? "npm test" : `${a.model.packageManager} test`;
+  const fnTotal = a.model.agents.filter((x) => x.entry?.kind === "llm-function").length;
+  const unguarded = unguardedTools(a.findings);
   console.log();
   console.log(
     renderCard({
-      tools: a.model.tools.length,
-      unguarded: unguardedTools(a.findings),
+      tools: a.model.tools.length || a.model.agents.filter((x) => x.entry?.kind === "llm-function").length,
+      noun: a.model.tools.length ? "tools" : fnTotal === 1 ? "LLM function" : "LLM functions",
+      unguardedLabel: a.model.tools.length ? "had no guardrails" : unguarded === 1 ? "has prompt rules nothing enforces" : "have prompt rules nothing enforces",
+      unguarded,
       evals: files.length,
       files,
       runCommand,
@@ -323,6 +337,7 @@ function readJsonFile<T = unknown>(file: string): T {
 }
 
 main().catch((e) => {
+  if (e instanceof ScanError || e instanceof HarnessError || e instanceof LLMSetupError) fail(e.message);
   console.error(e);
   process.exit(1);
 });

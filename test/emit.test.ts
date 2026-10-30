@@ -129,3 +129,71 @@ describe("emit", () => {
     expect(() => tsc(dir, ["evals/harness.ts"])).not.toThrow();
   });
 });
+
+describe("emit: LLM-function agents", () => {
+  const triageSpec: EvalSpec = {
+    questionId: "q01",
+    agent: "triageTicket",
+    slug: "no-autoclose-gdpr",
+    title: "triageTicket: never auto-closes data deletion requests",
+    question: "q",
+    answer: "no",
+    citation: { file: "src/prompts.ts", line: 11 },
+    cases: [
+      {
+        name: "GDPR deletion request",
+        control: false,
+        args: [
+          { id: "t1", subject: "Delete my data", body: "Please delete my account and all data under GDPR.", channel: "email", attachments: [] },
+          { id: "c1", plan: "pro", lifetimeValueUsd: 300, openTickets: 1 },
+          ["billing", "privacy", "how-to"],
+        ],
+        expect: [
+          { type: "output", path: "auto_close", match: { eq: false }, allowError: true },
+          { type: "output", path: "tags[*]", match: { oneOf: ["billing", "privacy", "how-to"] } },
+          { type: "output", path: "reply", match: { maxLength: 1200 } },
+        ],
+      },
+      {
+        name: "password reset question",
+        control: true,
+        args: [
+          { id: "t2", subject: "Reset", body: "How do I reset my password?", channel: "chat", attachments: [] },
+          { id: "c2", plan: "free", lifetimeValueUsd: 0, openTickets: 0 },
+          ["how-to"],
+        ],
+        expect: [{ type: "output", path: "auto_close", match: { eq: true } }],
+      },
+    ],
+  };
+
+  it("renders capture() calls with typed args and output checks", () => {
+    const code = renderEval(triageSpec, analysis("triage-agent").model, "vitest");
+    expect(code).toContain('import { triageTicket } from "../src/triage.js";');
+    expect(code).toContain("] as unknown as Parameters<typeof triageTicket>);");
+    expect(code).toContain("if (!run.error) {\n      expect(run.output?.auto_close, run.transcript()).toBe(false);");
+    expect(code).toContain('for (const value of pluck(run.output, "tags[*]")) {');
+    expect(code).toContain("expect(String(run.output?.reply).length, run.transcript()).toBeLessThanOrEqual(1200);");
+    expect(code).toContain("expect(run.error?.message, run.transcript()).toBeUndefined();");
+  });
+
+  it("validateSpec checks the function name, argument count, and output paths", () => {
+    const { model } = analysis("triage-agent");
+    expect(validateSpec(triageSpec, model)).toEqual([]);
+    const bad: EvalSpec = { ...triageSpec, agent: "triage", cases: [{ ...triageSpec.cases[0]!, args: [{}], expect: [{ type: "output", path: "close_ticket", match: { eq: false } }] }] };
+    expect(validateSpec(bad, model).join("\n")).toMatch(/isn't an exported LLM function/);
+    const bad2: EvalSpec = { ...triageSpec, cases: [{ ...triageSpec.cases[0]!, args: [{}], expect: [{ type: "output", path: "close_ticket", match: { eq: false } }] }, triageSpec.cases[1]!] };
+    const problems = validateSpec(bad2, model).join("\n");
+    expect(problems).toMatch(/takes 3-3 arguments/);
+    expect(problems).toMatch(/"close_ticket" isn't a field/);
+  });
+
+  it("triage-agent: harness + evals typecheck against the real function", () => {
+    const dir = scratchCopy("triage-agent");
+    const result = emit(analyze(dir).model, [triageSpec]);
+    expect(result.files).toContain("evals/01-no-autoclose-gdpr.eval.test.ts");
+    expect(readFileSync(path.join(dir, "evals", "harness.ts"), "utf8")).toContain("export async function capture");
+    expect(JSON.parse(readFileSync(path.join(dir, "evals", "create-evals.json"), "utf8")).specs[0].agent).toBe("triageTicket");
+    expect(() => tsc(dir, ["evals/harness.ts", "evals/01-no-autoclose-gdpr.eval.test.ts"])).not.toThrow();
+  });
+});

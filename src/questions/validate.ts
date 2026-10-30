@@ -38,11 +38,19 @@ export function validateQuestions(root: string, questions: Question[], findings:
       if (other.findingId === q.findingId) bad(`duplicates ${other.id} (same finding)`);
       else {
         const sameTool = byId.get(other.findingId)?.tool === f.tool && !!f.tool;
-        if (similarity(other.text, q.text) > (sameTool ? 0.75 : 0.92)) bad(`near-duplicate of ${other.id}`);
+        // Templates share most of their words; what distinguishes two questions is what they quote.
+        const qa = quoted(other.text);
+        const qb = quoted(q.text);
+        const differentQuotes = qa && qb && similarity(qa, qb) < 0.6;
+        if (!differentQuotes && similarity(other.text, q.text) > (sameTool ? 0.75 : 0.92)) bad(`near-duplicate of ${other.id}`);
       }
     }
   });
   return issues;
+}
+
+function quoted(s: string): string {
+  return [...s.matchAll(/"([^"]{6,})"/g)].map((m) => m[1]).join(" ");
 }
 
 function words(s: string) {
