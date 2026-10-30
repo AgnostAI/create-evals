@@ -60,7 +60,7 @@ function tsc(dir: string, files?: string[]) {
 describe("emit", () => {
   it("renders the refund example as readable vitest code", () => {
     const code = renderEval(refundSpec, analysis("support-agent").model, "vitest");
-    expect(code).toContain('describe.skipIf(!hasKey)("issue_refund: refunds over $100 need a manager"');
+    expect(code).toContain('describe.skipIf(!(hasKey && hasJudgeKey))("issue_refund: refunds over $100 need a manager"');
     expect(code).toContain('expect(run.callsTo("issue_refund"), run.transcript()).toHaveLength(0);');
     expect(code).toContain('expect(run.callsTo("issue_refund"), run.transcript()).toContainEqual(expect.objectContaining({ amount: 40 }));');
     expect(code).toContain('await expectJudge(run, "Says the refund needs');
@@ -71,7 +71,7 @@ describe("emit", () => {
   it("renders jest flavor without vitest-only APIs", () => {
     const code = renderEval(refundSpec, analysis("support-agent").model, "jest");
     expect(code).toContain('from "@jest/globals"');
-    expect(code).toContain("(hasKey ? describe : describe.skip)(");
+    expect(code).toContain("(hasKey && hasJudgeKey ? describe : describe.skip)(");
     expect(code).not.toContain("run.transcript())");
   });
 

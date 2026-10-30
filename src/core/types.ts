@@ -2,7 +2,7 @@
 // read it, emitters consume it. Adding Python later means a new scanner + emitter;
 // nothing in risk/ or questions/ should need to change.
 
-export type Framework = "vercel-ai" | "openai-agents" | "mastra" | "openai-sdk" | "anthropic-sdk";
+export type Framework = "vercel-ai" | "openai-agents" | "mastra" | "openai-sdk" | "anthropic-sdk" | "custom";
 export type TestRunner = "vitest" | "jest";
 
 /** A 1-based line in a file, path relative to the repo root (always forward slashes). */
@@ -151,6 +151,8 @@ export interface AgentModel {
   prompts: PromptDef[];
   /** Env var the agent's model provider reads, e.g. ANTHROPIC_API_KEY. */
   providerEnv: string;
+  /** Every env var the evals need (defaults to [providerEnv]); without all of them, evals skip. */
+  requiredEnv?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -214,7 +216,16 @@ export interface AnsweredQuestion extends Question {
   answer: "yes" | "no";
 }
 
-export type ArgMatcher = { eq?: string | number | boolean; lte?: number; gte?: number; contains?: string };
+export type ArgMatcher = {
+  eq?: string | number | boolean;
+  ne?: string | number | boolean;
+  lte?: number;
+  gte?: number;
+  contains?: string;
+  notContains?: string;
+  /** true = the argument is missing, null, or false. */
+  absent?: boolean;
+};
 
 export type OutputMatcher = {
   eq?: string | number | boolean | null;
@@ -228,7 +239,8 @@ export type OutputMatcher = {
 };
 
 export type Assertion =
-  | { type: "not_called"; tool: string }
+  /** With `with`: never called with arguments matching it (other calls are fine). */
+  | { type: "not_called"; tool: string; with?: Record<string, ArgMatcher> }
   | { type: "called"; tool: string; with?: Record<string, ArgMatcher> }
   | { type: "max_calls"; tool: string; max: number }
   | { type: "every_call"; tool: string; with: Record<string, ArgMatcher> }

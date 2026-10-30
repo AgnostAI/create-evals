@@ -19,6 +19,28 @@ interface PackageJson {
 
 export class ScanError extends Error {}
 
+/**
+ * Repo facts that don't depend on recognizing the agent: package manager, test runner, import
+ * style. Used when the host agent maps the agent itself.
+ */
+export function repoBase(root: string): AgentModel {
+  const pkg = readJson<PackageJson>(path.join(root, "package.json"));
+  if (!pkg) throw new ScanError(`No package.json in ${root}. Run create-evals from the root of a TypeScript agent repo.`);
+  const ctx = loadProject(root);
+  return {
+    root,
+    framework: "custom",
+    runner: detectRunner(pkg),
+    importExtension: detectImportExtension(ctx.files.map((f) => f.getText())),
+    packageManager: detectPackageManager(root),
+    dependencies: { ...pkg.dependencies, ...pkg.devDependencies },
+    agents: [],
+    tools: [],
+    prompts: [],
+    providerEnv: providerEnv("custom", "", { ...pkg.dependencies, ...pkg.devDependencies }),
+  };
+}
+
 export function scan(root: string): AgentModel {
   const pkg = readJson<PackageJson>(path.join(root, "package.json"));
   if (!pkg) throw new ScanError(`No package.json in ${root}. Run create-evals from the root of a TypeScript agent repo.`);
@@ -59,7 +81,7 @@ export function scan(root: string): AgentModel {
     // Factories can produce several tools under one name (one per provider); keep the first.
     tools: best.tools.filter((t, i, all) => all.findIndex((u) => u.name === t.name) === i),
     prompts,
-    providerEnv: providerEnv(framework, modelText),
+    providerEnv: providerEnv(framework, modelText, deps),
   };
 }
 
@@ -90,11 +112,16 @@ function detectPackageManager(root: string): AgentModel["packageManager"] {
   return "npm";
 }
 
-function providerEnv(framework: Framework, model: string): string {
+function providerEnv(framework: Framework, model: string, deps: Record<string, string> = {}): string {
   if (framework === "openai-sdk") return "OPENAI_API_KEY";
   if (framework === "anthropic-sdk") return "ANTHROPIC_API_KEY";
   if (/anthropic|claude/i.test(model)) return "ANTHROPIC_API_KEY";
   if (/google|gemini/i.test(model)) return "GOOGLE_GENERATIVE_AI_API_KEY";
   if (/openai|gpt-|o\d/i.test(model)) return "OPENAI_API_KEY";
+  // Model built elsewhere (createOpenAI(), a config file): go by which provider package is installed.
+  const has = (p: string) => p in deps;
+  if (has("@ai-sdk/openai") && !has("@ai-sdk/anthropic")) return "OPENAI_API_KEY";
+  if (has("@ai-sdk/google") && !has("@ai-sdk/anthropic")) return "GOOGLE_GENERATIVE_AI_API_KEY";
+  if (has("openai") && !has("@anthropic-ai/sdk") && !has("@ai-sdk/anthropic")) return "OPENAI_API_KEY";
   return framework === "openai-agents" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
 }

@@ -5,7 +5,8 @@ export interface CardStats {
   /** What `tools` counts: "tools" or "LLM functions". */
   noun?: string;
   unguardedLabel?: string;
-  unguarded: number;
+  /** Omitted when there are no scanner findings to back it (e.g. the host agent mapped the agent). */
+  unguarded?: number;
   evals: number;
   files: string[];
   runCommand: string;
@@ -16,7 +17,8 @@ export interface CardStats {
 const visible = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
 export function renderCard(s: CardStats): string {
-  const headline = `${pc.bold(String(s.tools))} ${s.noun ?? "tools"} scanned · ${pc.bold(pc.yellow(String(s.unguarded)))} ${s.unguardedLabel ?? "had no guardrails"} · ${pc.bold(pc.green(String(s.evals)))} evals written`;
+  const middle = s.unguarded === undefined ? "" : ` · ${pc.bold(pc.yellow(String(s.unguarded)))} ${s.unguardedLabel ?? "had no guardrails"}`;
+  const headline = `${pc.bold(String(s.tools))} ${s.noun ?? "tools"} ${s.unguarded === undefined ? "mapped" : "scanned"}${middle} · ${pc.bold(pc.green(String(s.evals)))} evals written`;
   const lines = [
     pc.bold("create-evals"),
     "",

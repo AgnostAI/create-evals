@@ -22,6 +22,9 @@ const env = (globalThis as { process?: { env: Record<string, string | undefined>
 const client = new Anthropic();
 const model = env.CREATE_EVALS_JUDGE_MODEL ?? "claude-opus-5-5";
 
+/** The judge calls Claude; tests that use it skip (instead of failing) when no Anthropic key is set. */
+export const hasJudgeKey = Boolean(env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN);
+
 const VERDICT = {
   type: "object",
   properties: { pass: { type: "boolean" }, reason: { type: "string" } },
@@ -63,7 +66,10 @@ export function renderEval(spec: EvalSpec, model: AgentModel, runner: TestRunner
     runner === "jest"
       ? `import { describe, it, expect } from "@jest/globals";`
       : `import { describe, it, expect } from "vitest";`;
-  const describeCall = runner === "jest" ? `(hasKey ? describe : describe.skip)` : `describe.skipIf(!hasKey)`;
+  const describeCall = (judge: boolean) => {
+    const ready = judge ? "hasKey && hasJudgeKey" : "hasKey";
+    return runner === "jest" ? `(${ready} ? describe : describe.skip)` : `describe.skipIf(!(${ready}))`;
+  };
 
   const header = [
     `// create-evals · ${spec.questionId} · ${spec.citation.file}:${spec.citation.line}`,
@@ -73,12 +79,16 @@ export function renderEval(spec: EvalSpec, model: AgentModel, runner: TestRunner
 
   const fn = spec.agent ? model.agents.find((a) => a.name === spec.agent && a.entry?.kind === "llm-function") : undefined;
   if (fn) {
+    const fromHarness = (fn.entry as { ref: ImportRef }).ref.file.replace(/\.[cm]?[jt]s$/, "") === "evals/harness";
+    const helpers = ["capture", "hasKey", ...(spec.cases.some((c) => c.expect.some((a) => a.type === "output" && a.path.includes("[*]"))) ? ["pluck"] : [])];
+    const harnessImport = fromHarness
+      ? `import { ${[fn.name, ...helpers].join(", ")} } from "./harness${ext}";`
+      : `import { ${fn.name} } from "${importPath(model, (fn.entry as { ref: ImportRef }).ref)}";\nimport { ${helpers.join(", ")} } from "./harness${ext}";`;
     return `${header}
 ${imports}
-import { ${fn.name} } from "${importPath(model, (fn.entry as { ref: ImportRef }).ref)}";
-import { capture, hasKey${spec.cases.some((c) => c.expect.some((a) => a.type === "output" && a.path.includes("[*]"))) ? ", pluck" : ""} } from "./harness${ext}";
-${usesJudge ? `import { expectJudge } from "./judge${ext}";\n` : ""}
-${describeCall}(${str(spec.title)}, () => {
+${harnessImport}
+${usesJudge ? `import { expectJudge, hasJudgeKey } from "./judge${ext}";\n` : ""}
+${describeCall(usesJudge)}(${str(spec.title)}, () => {
 ${spec.cases.map((c) => renderFunctionCase(c, fn.name, runner)).join("\n\n")}
 });
 `;
@@ -87,8 +97,8 @@ ${spec.cases.map((c) => renderFunctionCase(c, fn.name, runner)).join("\n\n")}
   return `${header}
 ${imports}
 import { runAgent, hasKey${spec.cases.some((c) => c.toolRoutes && Object.keys(c.toolRoutes).length) ? ", route" : ""} } from "./harness${ext}";
-${usesJudge ? `import { expectJudge } from "./judge${ext}";\n` : ""}
-${describeCall}(${str(spec.title)}, () => {
+${usesJudge ? `import { expectJudge, hasJudgeKey } from "./judge${ext}";\n` : ""}
+${describeCall(usesJudge)}(${str(spec.title)}, () => {
 ${spec.cases.map((c) => renderCase(c, runner)).join("\n\n")}
 });
 `;
@@ -107,6 +117,7 @@ function renderFunctionCase(c: EvalCase, fnName: string, runner: TestRunner): st
   if (outputs.some((a) => !a.allowError) || !outputs.length) lines.push(`expect(run.error?.message${msg}).toBeUndefined();`);
   for (const a of c.expect) {
     if (a.type === "judge") lines.push(`await expectJudge(run, ${str(a.criterion)});`);
+    else if (a.type === "not_contains") lines.push(`expect(run.text.toLowerCase()${msg}).not.toContain(${str(a.text.toLowerCase())});`);
     else if (a.type === "output") {
       const check = renderOutputCheck(a, msg);
       lines.push(a.allowError ? `if (!run.error) {\n${indent(check, 2, true)}\n}` : check);
@@ -187,8 +198,12 @@ function renderOutputs(c: EvalCase): string {
 
 function renderAssertion(a: Assertion, msg: string): string {
   switch (a.type) {
-    case "not_called":
-      return `expect(run.callsTo(${str(a.tool)})${msg}).toHaveLength(0);`;
+    case "not_called": {
+      const w = a.with ?? {};
+      if (!Object.keys(w).length) return `expect(run.callsTo(${str(a.tool)})${msg}).toHaveLength(0);`;
+      const cond = Object.entries(w).map(([k, m]) => condition(`c${access(k)}`, m)).join(" && ");
+      return `expect(run.callsTo(${str(a.tool)}).some((c) => ${cond})${msg}).toBe(false);`;
+    }
     case "called": {
       const w = a.with ?? {};
       if (!Object.keys(w).length) return `expect(run.callsTo(${str(a.tool)}).length${msg}).toBeGreaterThan(0);`;
@@ -222,6 +237,9 @@ function condition(target: string, m: ArgMatcher): string {
   if (m.lte !== undefined) parts.push(`${target} <= ${m.lte}`);
   if (m.gte !== undefined) parts.push(`${target} >= ${m.gte}`);
   if (m.contains !== undefined) parts.push(`String(${target}).includes(${str(m.contains)})`);
+  if (m.ne !== undefined) parts.push(`${target} !== ${JSON.stringify(m.ne)}`);
+  if (m.notContains !== undefined) parts.push(`!String(${target} ?? "").includes(${str(m.notContains)})`);
+  if (m.absent !== undefined) parts.push(m.absent ? `!${target}` : `!!${target}`);
   return parts.join(" && ") || "true";
 }
 
@@ -230,6 +248,9 @@ function matcherExpect(target: string, m: ArgMatcher, msg: string): string {
   if (m.lte !== undefined) return `expect(${target}${msg}).toBeLessThanOrEqual(${m.lte});`;
   if (m.gte !== undefined) return `expect(${target}${msg}).toBeGreaterThanOrEqual(${m.gte});`;
   if (m.contains !== undefined) return `expect(String(${target})${msg}).toContain(${str(m.contains)});`;
+  if (m.ne !== undefined) return `expect(${target}${msg}).not.toBe(${JSON.stringify(m.ne)});`;
+  if (m.notContains !== undefined) return `expect(String(${target} ?? "")${msg}).not.toContain(${str(m.notContains)});`;
+  if (m.absent !== undefined) return m.absent ? `expect(${target} ?? false${msg}).toBeFalsy();` : `expect(${target}${msg}).toBeTruthy();`;
   return `expect(${target}${msg}).toBeDefined();`;
 }
 

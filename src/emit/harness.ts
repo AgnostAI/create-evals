@@ -90,12 +90,13 @@ function renderFunctionHarness(model: AgentModel): string {
 const env = ((globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env ?? {}) as Record<string, string | undefined>;
 
 /** Evals call your real model. Without a key they're skipped instead of failing. */
-export const hasKey = Boolean(env.${model.providerEnv});
-if (!hasKey) console.warn("[create-evals] ${model.providerEnv} is not set; skipping evals.");
+${envGate(model)}
 
 export interface Run<T = any> {
   /** What the function returned, if it returned. */
   output?: T;
+  /** The return value as text (the string itself, or JSON), for not_contains checks. */
+  text: string;
   /** What it threw, if it threw. */
   error?: Error;
   /** Inputs and output, for the judge and for failure messages. */
@@ -119,6 +120,7 @@ export async function capture<A extends unknown[], T>(fn: (...args: A) => Promis
   return {
     output,
     error,
+    text: typeof output === "string" ? output : JSON.stringify(output ?? null),
     transcript: () =>
       [
         \`CALL \${fn.name}(\`,
@@ -153,8 +155,7 @@ export function renderHarness(model: AgentModel): string {
   const agent = pickAgent(model);
   const entry = agent.entry!;
   const keyCheck = `/** Evals call your real model. Without a key they're skipped instead of failing. */
-export const hasKey = Boolean(env.${model.providerEnv});
-if (!hasKey) console.warn("[create-evals] ${model.providerEnv} is not set; skipping evals.");`;
+${envGate(model)}`;
 
   switch (entry.kind) {
     case "function": {
@@ -334,8 +335,8 @@ ${SHARED}
 ${keyCheckFor(model)}
 
 /**
- * TODO: run your agent here. Pass \`wrap(yourTools, calls, outputs)\` as its tools so calls are recorded
- * instead of executed, and return the final reply text.
+ * TODO: run your agent here and return its final reply text. Pass its tools through
+ * \`wrapTools(tools)\` so calls are recorded instead of executed (tools in PASSTHROUGH run for real).
  */
 async function callYourAgent(messages: Message[], wrapTools: <T extends Record<string, any>>(tools: T) => T): Promise<string> {
   void messages;
@@ -351,7 +352,13 @@ export async function runAgent(input: string | Message[], opts: { toolOutputs?: 
     Object.fromEntries(
       Object.entries(tools).map(([name, tool]) => [
         name,
-        { ...tool, execute: async (input: any) => (calls.push({ tool: name, input }), outputFor(name, input, outputs)) },
+        {
+          ...tool,
+          execute: async (input: any, ...rest: any[]) => {
+            calls.push({ tool: name, input });
+            return PASSTHROUGH.has(name) ? tool.execute(input, ...rest) : outputFor(name, input, outputs);
+          },
+        },
       ]),
     ) as T;
   const text = await callYourAgent(messages, wrapTools);
@@ -362,8 +369,7 @@ export async function runAgent(input: string | Message[], opts: { toolOutputs?: 
 
 function keyCheckFor(model: AgentModel): string {
   return `/** Evals call your real model. Without a key they're skipped instead of failing. */
-export const hasKey = Boolean(env.${model.providerEnv});
-if (!hasKey) console.warn("[create-evals] ${model.providerEnv} is not set; skipping evals.");`;
+${envGate(model)}`;
 }
 
 /** The agent instance: the export itself, or the result of calling an exported zero-arg factory. */
@@ -390,4 +396,12 @@ export function pickAgent(model: AgentModel): AgentDef {
     );
   }
   return best;
+}
+
+/** `hasKey` is true only when every env var the agent needs is set. */
+export function envGate(model: AgentModel): string {
+  const vars = model.requiredEnv ?? [model.providerEnv];
+  return `const REQUIRED_ENV = ${JSON.stringify(vars)};
+export const hasKey = REQUIRED_ENV.every((name) => Boolean(env[name]));
+if (!hasKey) console.warn(\`[create-evals] \${REQUIRED_ENV.filter((name) => !env[name]).join(", ")} not set; skipping evals.\`);`;
 }

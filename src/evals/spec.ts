@@ -8,14 +8,17 @@ import type { AgentModel, EvalSpec } from "../core/types.js";
 const ArgMatcher = z
   .object({
     eq: z.union([z.string(), z.number(), z.boolean()]).optional(),
+    ne: z.union([z.string(), z.number(), z.boolean()]).optional(),
     lte: z.number().optional(),
     gte: z.number().optional(),
     contains: z.string().optional(),
+    notContains: z.string().optional(),
+    absent: z.boolean().optional(),
   })
-  .describe("Constraint on one tool argument. Use exactly one of eq / lte / gte / contains.");
+  .describe("Constraint on one tool argument: eq, ne, lte, gte, contains, notContains, or absent (missing/null/false).");
 
 const Assertion = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("not_called"), tool: z.string() }),
+  z.object({ type: z.literal("not_called"), tool: z.string(), with: z.record(z.string(), ArgMatcher).optional() }),
   z.object({ type: z.literal("called"), tool: z.string(), with: z.record(z.string(), ArgMatcher).optional() }),
   z.object({ type: z.literal("max_calls"), tool: z.string(), max: z.number().int().min(0) }),
   z.object({ type: z.literal("every_call"), tool: z.string(), with: z.record(z.string(), ArgMatcher) }),
@@ -23,7 +26,7 @@ const Assertion = z.discriminatedUnion("type", [
   z.object({ type: z.literal("judge"), criterion: z.string().min(10) }),
   z.object({
     type: z.literal("output"),
-    path: z.string().min(1).describe("Dotted path into the return value; [*] = every array element, e.g. output.changes[*].file_path"),
+    path: z.string().describe('Dotted path into the return value; [*] = every array element, e.g. "output.changes[*].file_path". "" = the return value itself.'),
     match: z.object({
       eq: z.union([z.string(), z.number(), z.boolean(), z.null()]).optional(),
       contains: z.string().optional(),
@@ -90,11 +93,13 @@ export function validateSpec(spec: EvalSpec, model: AgentModel): string[] {
       else if (c.args.length < required || c.args.length > params.length) problems.push(`${where}: ${fn.name} takes ${required}-${params.length} arguments (${params.map((p) => p.name).join(", ")}), got ${c.args.length}`);
       for (const a of c.expect) {
         if (a.type !== "output") continue;
-        const last = a.path.replace(/\[\*\]/g, "").split(".").filter(Boolean).at(-1)!;
-        const known = (fn.outputFields ?? []).some((f) => f.name === last) || fn.entry.returnType.includes(last);
+        const last = a.path.replace(/\[(\*|\d+)\]/g, "").split(".").filter(Boolean).at(-1);
+        // Shapes the caller decides (unknown/any/generic records) can't be checked statically.
+        const dynamic = /\b(unknown|any|Record<|T\b|object)\b/.test(fn.entry.returnType) && !(fn.outputFields ?? []).length;
+        const known = !last || dynamic || (fn.outputFields ?? []).some((f) => f.name === last) || fn.entry.returnType.includes(last);
         if (!known) problems.push(`${where}: output path "${a.path}" — "${last}" isn't a field ${fn.name} returns (returns ${fn.entry.returnType.slice(0, 160)})`);
       }
-      if (c.expect.some((a) => a.type !== "output" && a.type !== "judge")) problems.push(`${where}: LLM-function evals use only "output" and "judge" assertions`);
+      if (c.expect.some((a) => !["output", "judge", "not_contains"].includes(a.type))) problems.push(`${where}: LLM-function evals use "output", "not_contains", and "judge" assertions`);
       continue;
     }
     if (!c.messages?.length) problems.push(`${where}: needs "messages"`);

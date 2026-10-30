@@ -3,7 +3,8 @@ import { templateQuestion } from "./questions/templates.js";
 import { lineText } from "./scan/project.js";
 import { rank, suppress } from "./risk/rank.js";
 import { runRules } from "./risk/rules.js";
-import { scan } from "./scan/index.js";
+import { applyAgentMap, readAgentMap } from "./core/agent-map.js";
+import { repoBase, scan, ScanError } from "./scan/index.js";
 
 export const QUESTION_COUNT = 10;
 
@@ -47,4 +48,31 @@ export function adhocFinding(root: string, q: Question): Finding | undefined {
     symbols: symbols.length ? symbols : ["\u0000"],
     facts: { question: q.text },
   };
+}
+
+export interface Workspace extends Analysis {
+  /** Why the scanner couldn't recognize the agent, if it couldn't. */
+  scanError?: string;
+  /** Problems with .create-evals/agent.json, if there is one. */
+  mapProblems: string[];
+  hasMap: boolean;
+}
+
+/**
+ * What the skill commands work from: the scanner's view when it recognizes the agent, merged
+ * with the host agent's map (.create-evals/agent.json). Neither alone is required.
+ */
+export function workspace(root: string): Workspace {
+  let analysis: Analysis;
+  let scanError: string | undefined;
+  try {
+    analysis = analyze(root);
+  } catch (e) {
+    if (!(e instanceof ScanError) || /No package\.json/.test(e.message)) throw e;
+    scanError = e.message;
+    analysis = { model: repoBase(root), findings: [], picked: [], questions: [] };
+  }
+  const { map, problems } = readAgentMap(root);
+  const model = map ? applyAgentMap(analysis.model, map) : analysis.model;
+  return { ...analysis, model, scanError, mapProblems: problems, hasMap: !!map };
 }

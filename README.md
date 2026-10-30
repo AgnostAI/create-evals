@@ -14,29 +14,34 @@ ever refund more than $100 without a manager signing off?  (y/n)
 
 ## Quick start
 
-**In Claude Code** (no API key needed, your coding agent does the reading):
+create-evals is built to run **inside your coding agent**. Install the skill once, then ask for evals in plain words:
 
 ```bash
-npx create-evals skill          # installs .claude/skills/create-evals
-# then ask Claude Code: "create evals for this agent"
+npx create-evals skill           # Claude Code: installs .claude/skills/create-evals
+npx create-evals skill --agents  # Codex, Cursor, anything that reads AGENTS.md
 ```
 
-**In Codex, Cursor, or anything that reads `AGENTS.md`:**
+> "Write me evals for this agent."
 
-```bash
-npx create-evals skill --agents # adds a create-evals section to AGENTS.md
-```
+Your coding agent does the understanding: it finds the agent wherever it lives (a framework, a class, a route handler, a wrapper around the raw SDK, a framework nobody's heard of), works out how to call it, and reviews the code for risks. create-evals is its toolbox and referee:
 
-**Standalone CLI** (bring your own key):
+| Command | What it does for the agent |
+|---|---|
+| `scan --json` | A head start: tools, prompts with line numbers, and risk findings for shapes it recognizes |
+| `check` | Verifies every `file:line` the agent claims (its map of the agent, and every question) against the real files |
+| `emit` | Turns the answered questions into test files, a harness that records tool calls, and a judge |
+| `verify` | Typechecks the evals against your code, and checks the harness is wired and your test runner will pick them up |
+
+No API key needed beyond the ones your agent already uses. Then run your tests.
+
+**No coding agent?** There's a standalone CLI that does the same with your own key (it recognizes fewer agent shapes on its own):
 
 ```bash
 export ANTHROPIC_API_KEY=...
 npx create-evals
 ```
 
-Then run `npm test`.
-
-Supports TypeScript tool-calling agents built on the **Vercel AI SDK**, **OpenAI Agents SDK**, and **Mastra**, and **LLM functions**: exported functions that call the `openai` or `@anthropic-ai/sdk` client with a system prompt and return structured output, such as classifiers, triage, and "should we proceed?" decision agents. Writes **vitest** or **jest** tests, matching whatever you already use (vitest if you have neither). Python is next.
+Writes **vitest** or **jest** tests (vitest if you have neither). The CLI's own scanner recognizes the **Vercel AI SDK**, **OpenAI Agents SDK**, **Mastra**, and LLM functions on the `openai` / `@anthropic-ai/sdk` clients; inside a coding agent, anything TypeScript works. Python is next.
 
 ## What you get
 

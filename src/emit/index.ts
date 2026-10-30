@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { AgentModel, AnsweredQuestion, EvalSpec, TestRunner } from "../core/types.js";
 import { evalFileName, renderEval, renderJudge } from "./eval-file.js";
@@ -22,6 +22,7 @@ export interface EmitResult {
   runner: TestRunner;
   files: string[];
   kept: string[];
+  removed: string[];
   addedDeps: string[];
   addedTestScript: boolean;
 }
@@ -33,6 +34,7 @@ export function emit(model: AgentModel, specs: EvalSpec[], opts: EmitOptions = {
   mkdirSync(dir, { recursive: true });
   const files: string[] = [];
   const kept: string[] = [];
+  const removed: string[] = [];
 
   const write = (name: string, content: string, preserve = false) => {
     const target = path.join(dir, name);
@@ -47,6 +49,15 @@ export function emit(model: AgentModel, specs: EvalSpec[], opts: EmitOptions = {
   write("harness.ts", renderHarness(model), true);
   const usesJudge = specs.some((s) => s.cases.some((c) => c.expect.some((a) => a.type === "judge")));
   if (usesJudge) write("judge.ts", renderJudge(model), true);
+  const current = new Set(specs.map((spec, i) => evalFileName(spec, i)));
+  // Re-emitting renumbers files; drop earlier generated evals that are no longer in the spec set.
+  for (const name of readdirSync(dir)) {
+    if (!/^\d{2}-.*\.eval\.test\.ts$/.test(name) || current.has(name)) continue;
+    if (readFileSync(path.join(dir, name), "utf8").startsWith("// create-evals ·")) {
+      unlinkSync(path.join(dir, name));
+      removed.push(`${rel}/${name}`);
+    }
+  }
   specs.forEach((spec, i) => write(evalFileName(spec, i), renderEval(spec, model, runner)));
   write(
     "create-evals.json",
@@ -71,7 +82,7 @@ export function emit(model: AgentModel, specs: EvalSpec[], opts: EmitOptions = {
   );
 
   const { addedDeps, addedTestScript } = patchPackageJson(model, runner, usesJudge);
-  return { dir: rel, runner, files, kept, addedDeps, addedTestScript };
+  return { dir: rel, runner, files, kept, removed, addedDeps, addedTestScript };
 }
 
 function patchPackageJson(model: AgentModel, runner: TestRunner, usesJudge: boolean) {
@@ -99,4 +110,15 @@ function patchPackageJson(model: AgentModel, runner: TestRunner, usesJudge: bool
     writeFileSync(file, JSON.stringify(pkg, null, indent) + "\n");
   }
   return { addedDeps: needed, addedTestScript };
+}
+
+/** Write just the harness (and judge) so the host agent can add wrappers before writing specs. */
+export function emitHarness(model: AgentModel, opts: { outDir?: string; force?: boolean } = {}): { file: string; kept: boolean } {
+  const rel = opts.outDir ?? "evals";
+  const dir = path.join(model.root, rel);
+  mkdirSync(dir, { recursive: true });
+  const target = path.join(dir, "harness.ts");
+  if (existsSync(target) && !opts.force) return { file: `${rel}/harness.ts`, kept: true };
+  writeFileSync(target, renderHarness(model));
+  return { file: `${rel}/harness.ts`, kept: false };
 }
