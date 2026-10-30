@@ -61,6 +61,8 @@ export interface ToolDef {
 export interface ImportRef {
   file: string;
   exportName: string;
+  /** The export is a factory (`createAgent()`) that returns the thing, not the thing itself. */
+  call?: boolean;
 }
 
 export interface PromptLine {
@@ -170,7 +172,8 @@ export type RuleId =
   | "prompt-decision-rule"
   | "untrusted-input-in-prompt"
   /** Proposed by a model reviewing the code; still has to pass the same citation checks. */
-  | "model-review";
+  | "model-review"
+  | "secret-in-params";
 
 export interface Finding {
   /** Stable id, e.g. `missing-limit:issue_refund:amount`. */

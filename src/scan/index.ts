@@ -29,11 +29,18 @@ export function scan(root: string): AgentModel {
   // The one that defines the most tools wins.
   // A tool-calling agent beats a bare LLM function when both exist.
   const results = ADAPTERS.filter((a) => a.packages.some((p) => p in deps)).map((a) => ({ adapter: a, ...a.scan(ctx) }));
-  const weight = (r: (typeof results)[number]) => r.tools.length * 10 + r.agents.filter((x) => x.entry?.kind === "llm-function" && x.prompt).length;
+  const weight = (r: (typeof results)[number]) => r.tools.length * 10 + r.agents.filter((x) => x.entry && x.prompt).length;
   const best = results.sort((a, b) => weight(b) - weight(a))[0];
   if (!best || weight(best) === 0) {
+    const skipped = results.flatMap((r) => r.skipped ?? []);
+    const why = skipped.length
+      ? `\n\nLLM calls it found but couldn't use:\n${skipped
+          .slice(0, 5)
+          .map((x) => `  ${x.loc.file}:${x.loc.line} — ${x.reason}`)
+          .join("\n")}${skipped.length > 5 ? `\n  … and ${skipped.length - 5} more` : ""}`
+      : "";
     throw new ScanError(
-      "Couldn't find an agent. create-evals supports the Vercel AI SDK, OpenAI Agents SDK, and Mastra (tool-calling agents), and exported functions that call the openai or @anthropic-ai/sdk client with a system prompt.",
+      `Couldn't find an agent. create-evals supports tool-calling agents on the Vercel AI SDK, OpenAI Agents SDK, and Mastra, and exported functions that call an LLM (openai, @anthropic-ai/sdk, or the AI SDK) with a system prompt written in the code.${why}`,
     );
   }
 
@@ -49,7 +56,8 @@ export function scan(root: string): AgentModel {
     packageManager: detectPackageManager(root),
     dependencies: deps,
     agents: best.agents.filter((a) => a.entry?.kind !== "llm-function" || a.prompt),
-    tools: best.tools,
+    // Factories can produce several tools under one name (one per provider); keep the first.
+    tools: best.tools.filter((t, i, all) => all.findIndex((u) => u.name === t.name) === i),
     prompts,
     providerEnv: providerEnv(framework, modelText),
   };

@@ -184,6 +184,8 @@ function collectFields(t: Type, out: Set<string>, depth: number) {
   }
 }
 
+const GENERIC_KEYS = new Set(["tool", "value", "handler", "fn", "impl", "implementation", "def", "definition", "schema", "default", "execute", "run"]);
+
 /** Every object-literal property in the repo whose value refers to `decl`, as [key, objectLiteral]. */
 export function referencingKeys(ctx: ScanContext, decl: Node): { key: string; obj: Node }[] {
   const out: { key: string; obj: Node }[] = [];
@@ -192,7 +194,10 @@ export function referencingKeys(ctx: ScanContext, decl: Node): { key: string; ob
       if (!Node.isPropertyAssignment(n) && !Node.isShorthandPropertyAssignment(n)) return;
       const value = Node.isPropertyAssignment(n) ? n.getInitializer() : n.getNameNode();
       if (!value || !Node.isIdentifier(value)) return;
-      if (declarationOf(value) === decl) out.push({ key: n.getName().replace(/^["']|["']$/g, ""), obj: n.getParentOrThrow() });
+      const key = n.getName().replace(/^["']|["']$/g, "");
+      // `{ name: "x", tool: backgroundJobs }` is a registry entry, not a tool map.
+      if (GENERIC_KEYS.has(key)) return;
+      if (declarationOf(value) === decl) out.push({ key, obj: n.getParentOrThrow() });
     });
   }
   return out;

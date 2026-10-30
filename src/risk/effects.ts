@@ -11,13 +11,15 @@ export interface Effect {
 }
 
 const WORDS: [EffectKind, RegExp][] = [
-  ["money", /refund|charge|payout|pay\b|payment|transfer|credit|discount|coupon|invoice|price|billing/],
+  ["money", /refund|charge|payout|pay\b|payment|transfer|credit|discount|coupon|invoice|price|billing|escrow|withdraw|deposit|swap|trade|buy|sell|purchase|wallet|mint|stake|bet\b|tip\b|(place|create|submit)_?order/],
   ["delete", /delete|remove|drop|purge|wipe|destroy|truncate|cancel|terminate|revoke|ban|deactivate|archive/],
   ["exec", /\bexec|shell|command|terminal|bash|eval\b|run_?code|script/],
   ["send", /send|email|mail|sms|text_?message|notify|post_?message|publish|tweet|slack|campaign/],
   ["write", /write|create|update|overwrite|save|upload|push|deploy|commit|merge|insert|set_/],
 ];
 
+const READ_VERBS = /^(get|lookup|look|fetch|list|search|read|find|check|view|query|describe|show|count|load|retrieve|inspect|analy[sz]e|summari[sz]e|resolve_?airport)$/;
+const VERBS = /^(issue|apply|refund|charge|pay|transfer|cancel|delete|remove|drop|purge|wipe|destroy|send|email|post|publish|create|update|write|overwrite|save|upload|push|deploy|commit|merge|insert|set|resolve|run|exec|execute|mint|stake|swap|buy|sell|withdraw|deposit|revoke|ban|archive|terminate|book|reserve|submit|place)$/;
 const EXEC_SINKS = /^(execSync|exec|execFile|execFileSync|spawn|spawnSync|execa|\$|eval|Function|child_process\.\w+|cp\.\w+)$/;
 const FS_WRITE = /(^|\.)(writeFile|writeFileSync|appendFile|rm|rmSync|unlink|unlinkSync|rmdir|createWriteStream|rename|copyFile)$/;
 const FS_READ = /(^|\.)(readFile|readFileSync|createReadStream|readdir|readdirSync)$/;
@@ -36,7 +38,16 @@ export function effectOf(tool: ToolDef): Effect {
   const calls = tool.calls.map((c) => c.callee);
   const callText = calls.join(" ").toLowerCase();
 
-  if (calls.some((c) => EXEC_SINKS.test(c))) return { kind: "exec", does: "runs a shell command", act: "run a shell command" };
+  if (calls.some((c) => EXEC_SINKS.test(c))) {
+    return calls.some((c) => /^(eval|Function)$/.test(c))
+      ? { kind: "exec", does: "evaluates code", act: "evaluate code" }
+      : { kind: "exec", does: "runs a shell command", act: "run a shell command" };
+  }
+  // get_escrow_info, list_orders, search_flights: reads, whatever the noun.
+  const nameWords = words(tool.name);
+  const readish = READ_VERBS.test(nameWords[0] ?? "") || (nameWords.some((w) => READ_VERBS.test(w)) && !nameWords.some((w) => VERBS.test(w)));
+  if (readish && !calls.some((c) => FS_WRITE.test(c) || /(writeContract|sendTransaction)$/.test(c))) return { kind: "read", does: "reads data", act: "read data" };
+  if (calls.some((c) => /(writeContract|sendTransaction|signTransaction|sendRawTransaction)$/.test(c))) return describe("money", tool);
   for (const [kind, re] of WORDS) {
     if (re.test(nameText)) return describe(kind, tool);
   }
@@ -44,16 +55,22 @@ export function effectOf(tool: ToolDef): Effect {
   if (tool.calls.some((c) => c.callee === "fetch" && /method:\s*["'](PUT|POST|PATCH|DELETE)["']/.test(c.args.join(",")))) {
     return { kind: "external-write", does: "sends data to an external URL", act: "send data to an external URL" };
   }
+  // Callee names are noisy (`provider.execute(...)` is everywhere); only trust the unambiguous ones.
   for (const [kind, re] of WORDS) {
-    if (re.test(callText)) return describe(kind, tool);
+    if (kind !== "exec" && kind !== "write" && re.test(callText)) return describe(kind, tool);
   }
   return { kind: "read", does: "reads data", act: "read data" };
 }
 
 function describe(kind: EffectKind, tool: ToolDef): Effect {
   const w = words(tool.name);
-  const verb = w[0] ?? "run";
-  const object = w.slice(1).join(" ") || "this action";
+  // memoryDelete → verb "delete", object "memory"
+  const found = w.findIndex((x) => VERBS.test(x));
+  // No recognizable verb (backgroundJobs): talk about calling the tool instead of inventing one.
+  if (found < 0) return { kind, does: `${tool.name} takes effect`, act: `call \`${tool.name}\`` };
+  const vi = found;
+  const verb = w[vi]!;
+  const object = [...w.slice(0, vi), ...w.slice(vi + 1)].join(" ") || "this action";
   const article = /^[aeiou]/.test(object) ? "an" : "a";
   switch (kind) {
     case "money":

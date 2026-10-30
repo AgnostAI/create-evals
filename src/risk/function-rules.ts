@@ -235,3 +235,47 @@ function untrustedInputs(agent: AgentDef): Draft[] {
     },
   ];
 }
+
+const STRONG = /^(?:[-*•]|\d+\.)?\s*(never|always|do not|don't|you must|must|only|under no circumstances|avoid)\b/i;
+const RULES_HEADING = /rules|guidelines|constraints|policies|policy|restrictions|important|safety|guardrails|do not|never/i;
+
+/**
+ * Any agent's "Never …" / "Always …" lines. Nothing in code enforces them, so they're exactly
+ * what an eval should pin down. Ranked below findings backed by code (a tool, an output field).
+ */
+export function generalPromptRules(model: AgentModel, covered: Set<string>): Draft[] {
+  const out: Draft[] = [];
+  for (const agent of model.agents) {
+    if (!agent.prompt) continue;
+    const fields = agent.outputFields ?? [];
+    const hasDecision = fields.some(isBoolean) || fields.some((f) => f.example.startsWith("["));
+    if (agent.entry?.kind === "llm-function" && hasDecision) continue;
+    let heading = "";
+    const picked: { line: PromptLine; severity: 3 | 4 }[] = [];
+    for (const l of agent.prompt.lines) {
+      if (/^#{1,4}\s/.test(l.text) || (/^[A-Z][A-Za-z0-9 ()/&,'-]{3,40}:$/.test(l.text))) {
+        heading = l.text;
+        continue;
+      }
+      const key = `${agent.prompt.file}:${l.line}`;
+      if (covered.has(key) || l.text.length < 15 || l.text.length > 400) continue;
+      const strong = STRONG.test(l.text) || (/^([-*•]|\d+\.)\s/.test(l.text) && RULES_HEADING.test(heading) && /\b(never|always|do not|don't|must|only|avoid)\b/i.test(l.text));
+      if (!strong) continue;
+      picked.push({ line: l, severity: SEVERE.test(l.text) || /medical|legal|financial advice|harm|personal|pii|price|refund|promise|guarantee/i.test(l.text) ? 4 : 3 });
+    }
+    for (const { line, severity } of picked.sort((a, b) => b.severity - a.severity).slice(0, 3)) {
+      out.push({
+        rule: "prompt-decision-rule",
+        severity,
+        tool: agent.name,
+        param: `L${line.line}`,
+        title: `${agent.name}'s prompt rule "${clip(clean(line.text))}" has no check in code`,
+        loc: { file: agent.prompt.file, line: line.line },
+        related: [],
+        symbols: [agent.name, clip(clean(line.text), 60).replace(/…$/, "")],
+        facts: { agentFn: agent.name, quote: clip(clean(line.text)), heading, decisionField: "", listField: "", pathField: "", validatorText: "", general: true, function: true },
+      });
+    }
+  }
+  return out;
+}

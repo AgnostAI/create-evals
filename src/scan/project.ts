@@ -7,6 +7,8 @@ const IGNORED_DIRS = /(^|\/)(node_modules|dist|build|out|coverage|\.next|\.mastr
 const IGNORED_FILES = /\.(test|spec|eval)\.[cm]?[jt]sx?$|\.d\.ts$/;
 
 export interface ScanContext {
+  /** Set by adapters to share state (e.g. functions already turned into agents). */
+  seenFunctions?: Set<unknown>;
   root: string;
   project: Project;
   files: SourceFile[];
@@ -25,9 +27,15 @@ export function loadProject(root: string): ScanContext {
     path.join(root, "**/*.{ts,tsx,mts,cts,js,mjs}"),
     "!" + path.join(root, "**/node_modules/**"),
   ]);
-  const files = project.getSourceFiles().filter((sf) => {
+  const all = project.getSourceFiles();
+  const tsCount = all.filter((sf) => /\.(ts|tsx|mts|cts)$/.test(sf.getFilePath())).length;
+  const files = all.filter((sf) => {
     const rel = relPath(root, sf.getFilePath());
-    return !IGNORED_DIRS.test(rel) && !IGNORED_FILES.test(rel);
+    if (IGNORED_DIRS.test(rel) || IGNORED_FILES.test(rel)) return false;
+    // Built bundles (e.g. a plugin's main.js) are huge and duplicate the real source.
+    if (sf.getFullText().length > 150_000) return false;
+    if (tsCount >= 3 && /\.(js|mjs|cjs)$/.test(rel)) return false;
+    return true;
   });
   return { root, project, files };
 }
@@ -109,6 +117,25 @@ export function importRefFor(ctx: ScanContext, decl: Node | undefined): ImportRe
   const stmt = decl.getVariableStatement();
   if (!stmt?.isExported()) return undefined;
   return { file: relPath(ctx.root, decl.getSourceFile().getFilePath()), exportName: decl.getName() };
+}
+
+/**
+ * How to get an agent built by `new X(...)`: its exported variable, or an exported zero-arg
+ * factory that returns it (`export const createAgent = () => new Agent({...})`).
+ */
+export function agentRef(ctx: ScanContext, expr: Node): ImportRef | undefined {
+  const direct = importRefFor(ctx, expr.getParent());
+  if (direct) return direct;
+  for (let n: Node | undefined = expr.getParent(); n; n = n.getParent()) {
+    const isFn = Node.isFunctionDeclaration(n) || ((Node.isArrowFunction(n) || Node.isFunctionExpression(n)) && Node.isVariableDeclaration(n.getParent()!));
+    if (!isFn) continue;
+    const f = n as import("ts-morph").FunctionDeclaration;
+    if (f.getParameters().some((p) => !p.isOptional() && !p.hasInitializer())) return undefined;
+    if (Node.isFunctionDeclaration(n)) return n.isExported() && n.getName() ? { file: relPath(ctx.root, n.getSourceFile().getFilePath()), exportName: n.getName()!, call: true } : undefined;
+    const ref = importRefFor(ctx, n.getParent());
+    return ref ? { ...ref, call: true } : undefined;
+  }
+  return undefined;
 }
 
 /** Name of the module a call's callee was imported from, e.g. `ai` for `tool(...)`. */

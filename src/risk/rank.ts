@@ -24,6 +24,7 @@ const RULE_WEIGHT: Record<RuleId, number> = {
   "pii-exposure": 2,
   "no-confirmation": 1,
   "model-review": 0,
+  "secret-in-params": 5,
   "untrusted-input-in-prompt": 5,
   "prompt-decision-rule": 4,
   "prompt-output-rule": 3,

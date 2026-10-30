@@ -149,6 +149,7 @@ export function pluck(value: unknown, path: string): unknown[] {
 
 export function renderHarness(model: AgentModel): string {
   if (!model.tools.length && model.agents.some((a) => a.entry?.kind === "llm-function")) return renderFunctionHarness(model);
+  if (!model.agents.some((a) => a.entry)) return renderStubHarness(model);
   const agent = pickAgent(model);
   const entry = agent.entry!;
   const keyCheck = `/** Evals call your real model. Without a key they're skipped instead of failing. */
@@ -216,13 +217,14 @@ import { ${name} } from "${importPath(model, entry.ref)}";
 ${SHARED}
 
 ${keyCheck}
+${agentGetter(name, entry.ref.call)}
 
 export async function runAgent(input: string | Message[], opts: { toolOutputs?: ToolOutputs } = {}): Promise<Run> {
   const messages = toMessages(input);
   const calls: ToolCall[] = [];
   const restore = await patchTools(calls, opts.toolOutputs ?? {});
   try {
-    const result = await ${name}.generate(${isMastra ? "messages as any" : "{ messages } as any"});
+    const result = await (await getAgent()).generate(${isMastra ? "messages as any" : "{ messages } as any"});
     return makeRun(messages, result.text, calls);
   } catch (err) {
     const stopped = stoppedEarly(err);
@@ -234,7 +236,8 @@ export async function runAgent(input: string | Message[], opts: { toolOutputs?: 
 }
 
 async function patchTools(calls: ToolCall[], outputs: ToolOutputs) {
-  const tools = (${isMastra ? `await ${name}.listTools()` : `${name}.tools`}) as Record<string, any>;
+  const agent = await getAgent();
+  const tools = (${isMastra ? "await agent.listTools()" : "agent.tools"}) as Record<string, any>;
   const originals = new Map<string, any>();
   for (const [name, tool] of Object.entries(tools)) {
     if (typeof tool?.execute !== "function") continue;
@@ -266,15 +269,17 @@ setTracingDisabled(true);
 ${SHARED}
 
 ${keyCheck}
+${agentGetter(name, entry.ref.call)}
 
 export async function runAgent(input: string | Message[], opts: { toolOutputs?: ToolOutputs } = {}): Promise<Run> {
   const messages = toMessages(input);
   const calls: ToolCall[] = [];
-  const restore = patchTools(calls, opts.toolOutputs ?? {});
+  const agent = await getAgent();
+  const restore = patchTools(agent, calls, opts.toolOutputs ?? {});
   try {
     const items = messages.map((m) => (m.role === "user" ? user(m.content) : assistant(m.content)));
     // Recorded tools make agents double-check more than usual; give them room before calling it a loop.
-    const result = await run(${name}, messages.length === 1 ? messages[0]!.content : items, { maxTurns: 20 });
+    const result = await run(agent, messages.length === 1 ? messages[0]!.content : items, { maxTurns: 20 });
     const paused = result.interruptions?.map((i: any) => i.rawItem?.name ?? "tool") ?? [];
     const text = String(result.finalOutput ?? (paused.length ? \`[paused for human approval: \${paused.join(", ")}]\` : ""));
     return makeRun(messages, text, calls);
@@ -287,9 +292,9 @@ export async function runAgent(input: string | Message[], opts: { toolOutputs?: 
   }
 }
 
-function patchTools(calls: ToolCall[], outputs: ToolOutputs) {
+function patchTools(agent: any, calls: ToolCall[], outputs: ToolOutputs) {
   const originals = new Map<any, any>();
-  for (const tool of ${name}.tools as any[]) {
+  for (const tool of agent.tools as any[]) {
     if (tool.type !== "function") continue;
     const original = tool.invoke;
     originals.set(tool, original);
@@ -311,6 +316,69 @@ function patchTools(calls: ToolCall[], outputs: ToolOutputs) {
 `;
     }
   }
+}
+
+/**
+ * The agent isn't importable (built inside a route handler, a class, or an unexported function).
+ * Write the harness with one function to fill in, so the evals exist and fail loudly until wired.
+ */
+function renderStubHarness(model: AgentModel): string {
+  const where = model.agents[0] ? `it's built at ${model.agents[0].loc.file}:${model.agents[0].loc.line}` : "it's built somewhere create-evals couldn't follow, e.g. a class or a route handler";
+  return `${HEADER}
+//
+// create-evals couldn't import your agent directly (${where}), so
+// \`runAgent\` below needs one edit: call your agent with \`messages\` and \`tools\`.
+
+${SHARED}
+
+${keyCheckFor(model)}
+
+/**
+ * TODO: run your agent here. Pass \`wrap(yourTools, calls, outputs)\` as its tools so calls are recorded
+ * instead of executed, and return the final reply text.
+ */
+async function callYourAgent(messages: Message[], wrapTools: <T extends Record<string, any>>(tools: T) => T): Promise<string> {
+  void messages;
+  void wrapTools;
+  throw new Error("create-evals: wire up callYourAgent() in evals/harness.ts (see the comment above it).");
+}
+
+export async function runAgent(input: string | Message[], opts: { toolOutputs?: ToolOutputs } = {}): Promise<Run> {
+  const messages = toMessages(input);
+  const calls: ToolCall[] = [];
+  const outputs = opts.toolOutputs ?? {};
+  const wrapTools = <T extends Record<string, any>>(tools: T): T =>
+    Object.fromEntries(
+      Object.entries(tools).map(([name, tool]) => [
+        name,
+        { ...tool, execute: async (input: any) => (calls.push({ tool: name, input }), outputFor(name, input, outputs)) },
+      ]),
+    ) as T;
+  const text = await callYourAgent(messages, wrapTools);
+  return makeRun(messages, text, calls);
+}
+`;
+}
+
+function keyCheckFor(model: AgentModel): string {
+  return `/** Evals call your real model. Without a key they're skipped instead of failing. */
+export const hasKey = Boolean(env.${model.providerEnv});
+if (!hasKey) console.warn("[create-evals] ${model.providerEnv} is not set; skipping evals.");`;
+}
+
+/** The agent instance: the export itself, or the result of calling an exported zero-arg factory. */
+function agentGetter(name: string, factory?: boolean): string {
+  return factory
+    ? `let agentInstance: any;
+/** \`${name}\` is a factory; build the agent once and reuse it. */
+async function getAgent(): Promise<any> {
+  return (agentInstance ??= await ${name}());
+}
+`
+    : `async function getAgent(): Promise<any> {
+  return ${name};
+}
+`;
 }
 
 export function pickAgent(model: AgentModel): AgentDef {

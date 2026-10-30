@@ -2,7 +2,7 @@ import { Node, SyntaxKind, type SourceFile } from "ts-morph";
 import type { AgentDef, FunctionParam, OutputField, PromptDef, PromptInput, ToolDef } from "../../core/types.js";
 import { getProp, importRefFor, locOf, relPath, resolveValue, type ScanContext } from "../project.js";
 import { extractPrompt } from "../prompts.js";
-import type { Adapter } from "./types.js";
+import type { Adapter, SkippedSite } from "./types.js";
 
 // Agents written directly against a provider SDK: an exported function builds a prompt, calls
 // `client.chat.completions.create` / `client.responses.create` / `client.messages.create`, and
@@ -17,6 +17,7 @@ export const llmSdk: Adapter = {
   scan(ctx) {
     const agents: AgentDef[] = [];
     const tools: ToolDef[] = [];
+    const skipped: SkippedSite[] = [];
     const seen = new Set<Node>();
 
     for (const sf of ctx.files) {
@@ -25,62 +26,180 @@ export const llmSdk: Adapter = {
         const provider = OPENAI_CALL.test(callee) ? "openai" : ANTHROPIC_CALL.test(callee) && !callee.includes("completions") ? "anthropic" : undefined;
         if (!provider) continue;
         const cfg = call.getArguments()[0];
-        if (!cfg || !Node.isObjectLiteralExpression(cfg)) continue;
-
-        const fn = exportedFunction(call);
-        if (!fn || seen.has(fn.node)) continue;
-        seen.add(fn.node);
-        const ref = { file: relPath(ctx.root, sf.getFilePath()), exportName: fn.name };
-
-        const { system, user } = promptParts(cfg, provider);
-        const prompt = system ? longestPrompt(ctx, system) : undefined;
-        const params = fn.params;
-
-        agents.push({
-          name: fn.name,
-          framework: provider === "openai" ? "openai-sdk" : "anthropic-sdk",
-          loc: locOf(ctx, fn.node),
-          prompt,
-          toolNames: [],
-          model: getProp(cfg, "model")?.getText().replace(/\s+/g, " "),
-          entry: { kind: "llm-function", ref, params, returnType: fn.returnType },
-          outputFields: prompt ? outputFields(ctx, prompt) : [],
-          promptInputs: user ? promptInputs(ctx, user, params) : [],
-          paramTypes: paramTypeDecls(fn.node),
-          source: fn.node.getText().slice(0, 6000),
-        });
+        if (!cfg || !Node.isObjectLiteralExpression(cfg)) {
+          skipped.push({ loc: locOf(ctx, call), reason: "request options aren't an inline object" });
+          continue;
+        }
+        const framework = provider === "openai" ? "openai-sdk" : "anthropic-sdk";
+        const found = functionAgents(ctx, call, promptParts(cfg, provider), framework, getProp(cfg, "model")?.getText(), seen);
+        if (found === "none") skipped.push({ loc: locOf(ctx, call), reason: whyNotExported(call) });
+        else agents.push(...found);
       }
     }
-    return { tools, agents };
+    for (const a of agents) if (!a.prompt) skipped.push({ loc: a.loc, reason: `${a.name} has no system prompt written as a string in the code` });
+    return { tools, agents, skipped };
   },
 };
+
+interface Origin {
+  system?: Node;
+  user?: Node;
+}
+
+/**
+ * Turn one LLM call into agents. The call is often in a helper (`useOpenAI`) or a thin wrapper
+ * (`callClaude(system, prompt)`); walk up to the exported functions that reach it, carrying the
+ * prompt from each call site when the wrapper takes it as a parameter.
+ */
+export function functionAgents(
+  ctx: ScanContext,
+  call: Node,
+  origin: Origin,
+  framework: AgentDef["framework"],
+  model: string | undefined,
+  seen: Set<Node>,
+): AgentDef[] | "none" {
+  const hits = entryPoints(ctx, call, origin, 0);
+  if (!hits.length) return "none";
+  const out: AgentDef[] = [];
+  for (const { fn, system, user } of hits) {
+    if (seen.has(fn.node)) continue;
+    seen.add(fn.node);
+    const prompt = system ? longestPrompt(ctx, system) : undefined;
+    out.push({
+      name: fn.name,
+      framework,
+      loc: locOf(ctx, fn.node),
+      prompt,
+      toolNames: [],
+      model: model?.replace(/\s+/g, " "),
+      entry: { kind: "llm-function", ref: { file: relPath(ctx.root, fn.node.getSourceFile().getFilePath()), exportName: fn.name }, params: fn.params, returnType: fn.returnType },
+      outputFields: prompt ? outputFields(ctx, prompt) : [],
+      promptInputs: user ? promptInputs(ctx, user, fn.params) : [],
+      paramTypes: paramTypeDecls(fn.node),
+      source: fn.node.getText().slice(0, 6000),
+    });
+  }
+  return out;
+}
+
+interface Hit {
+  fn: FoundFunction;
+  system?: Node;
+  user?: Node;
+}
+
+function entryPoints(ctx: ScanContext, site: Node, origin: Origin, depth: number): Hit[] {
+  const inner = enclosingFunction(site);
+  if (!inner) return [];
+  const promptHere = origin.system ? longestPrompt(ctx, origin.system) : undefined;
+  if (inner.exported && (promptHere || depth >= 2 || !origin.system)) return [{ fn: inner, ...origin }];
+  if (depth >= 2) return [];
+
+  const hits: Hit[] = [];
+  for (const caller of callersOf(inner)) {
+    const system = promptHere ? origin.system : origin.system && (toCaller(origin.system, inner.node, caller) ?? origin.system);
+    const user = origin.user && toCaller(origin.user, inner.node, caller);
+    hits.push(...entryPoints(ctx, caller, { system, user: user ?? (inner.exported ? origin.user : undefined) }, depth + 1));
+  }
+  if (!hits.length && inner.exported) return [{ fn: inner, ...origin }];
+  return hits;
+}
+
+/** Call expressions that invoke this function (by name), anywhere in the project. */
+function callersOf(fn: FoundFunction & { nameNode?: Node }): Node[] {
+  if (!fn.nameNode || !Node.isIdentifier(fn.nameNode)) return [];
+  try {
+    return fn.nameNode
+      .findReferencesAsNodes()
+      .map((ref) => ref.getParent())
+      .filter((p): p is Node => !!p && (Node.isCallExpression(p) || (Node.isPropertyAccessExpression(p) && Node.isCallExpression(p.getParent()!))))
+      .map((p) => (Node.isPropertyAccessExpression(p) ? p.getParentOrThrow() : p))
+      .filter((c) => !c.getSourceFile().getFilePath().includes("node_modules"))
+      .slice(0, 12);
+  } catch {
+    return [];
+  }
+}
+
+/** If `expr` is (a property of) one of `fn`'s parameters, the matching expression at a call site. */
+function toCaller(expr: Node, fnNode: Node, call: Node): Node | undefined {
+  if (!Node.isCallExpression(call)) return undefined;
+  const params = (fnNode as import("ts-morph").FunctionDeclaration).getParameters?.() ?? [];
+  const at = (i: number, prop?: string) => {
+    const arg = call.getArguments()[i];
+    if (!arg) return undefined;
+    if (!prop) return arg;
+    const obj = resolveValue(arg);
+    return Node.isObjectLiteralExpression(obj) ? getProp(obj, prop) : undefined;
+  };
+  const target = Node.isPropertyAccessExpression(expr) ? expr.getExpression() : expr;
+  const prop = Node.isPropertyAccessExpression(expr) ? expr.getName() : undefined;
+  if (!Node.isIdentifier(target)) return undefined;
+  // `{ system }` — the name node's own symbol is the property; the parameter is the value symbol.
+  const parent = target.getParent();
+  const sym = parent && Node.isShorthandPropertyAssignment(parent) ? parent.getValueSymbol() : target.getSymbol();
+  const decl = sym?.getDeclarations()[0];
+  if (!decl) return undefined;
+  if (Node.isParameterDeclaration(decl)) {
+    const i = params.indexOf(decl);
+    return i >= 0 ? at(i, prop) : undefined;
+  }
+  // `function callClaude({ system, prompt })`
+  if (Node.isBindingElement(decl)) {
+    const param = decl.getFirstAncestorByKind(SyntaxKind.Parameter);
+    const i = param ? params.indexOf(param as import("ts-morph").ParameterDeclaration) : -1;
+    return i >= 0 ? at(i, decl.getPropertyNameNode()?.getText() ?? decl.getName()) : undefined;
+  }
+  return undefined;
+}
+
+function whyNotExported(call: Node): string {
+  for (let n: Node | undefined = call.getParent(); n; n = n.getParent()) {
+    if (Node.isMethodDeclaration(n)) return `it's inside a class method (${n.getParent()?.getKindName() === "ClassDeclaration" ? (n.getParent() as import("ts-morph").ClassDeclaration).getName() + "." : ""}${n.getName()}) and no exported function calls it`;
+    if (Node.isFunctionDeclaration(n)) return `it's inside ${n.getName() ?? "a function"}, which isn't exported or called from an exported function`;
+    if ((Node.isArrowFunction(n) || Node.isFunctionExpression(n)) && Node.isVariableDeclaration(n.getParent()!)) {
+      return `it's inside ${(n.getParent() as import("ts-morph").VariableDeclaration).getName()}, which isn't exported or called from an exported function`;
+    }
+  }
+  return "it runs at the top level of a script, not inside a function";
+}
 
 interface FoundFunction {
   node: Node;
   name: string;
+  exported: boolean;
+  nameNode?: Node;
   params: FunctionParam[];
   returnType: string;
 }
 
-function exportedFunction(call: Node): FoundFunction | undefined {
-  for (let n: Node | undefined = call.getParent(); n; n = n.getParent()) {
+/** The nearest named function around `node` (declaration, arrow/function bound to a variable, or method). */
+function enclosingFunction(node: Node): FoundFunction | undefined {
+  for (let n: Node | undefined = node.getParent(); n; n = n.getParent()) {
     let name: string | undefined;
-    let fnNode: Node | undefined;
-    if (Node.isFunctionDeclaration(n) && n.isExported()) {
+    let exported = false;
+    let nameNode: Node | undefined;
+    if (Node.isFunctionDeclaration(n) && n.getName()) {
       name = n.getName();
-      fnNode = n;
+      exported = n.isExported();
+      nameNode = n.getNameNode();
     } else if ((Node.isArrowFunction(n) || Node.isFunctionExpression(n)) && Node.isVariableDeclaration(n.getParent()!)) {
       const decl = n.getParentOrThrow() as import("ts-morph").VariableDeclaration;
-      if (decl.getVariableStatement()?.isExported()) {
-        name = decl.getName();
-        fnNode = n;
-      }
+      name = decl.getName();
+      exported = !!decl.getVariableStatement()?.isExported();
+      nameNode = decl.getNameNode();
+    } else if (Node.isMethodDeclaration(n)) {
+      name = n.getName();
+      nameNode = n.getNameNode();
     }
-    if (name && fnNode) {
-      const f = fnNode as import("ts-morph").FunctionDeclaration;
+    if (name) {
+      const f = n as import("ts-morph").FunctionDeclaration;
       return {
-        node: fnNode,
+        node: n,
         name,
+        exported,
+        nameNode,
         params: f.getParameters().map((p) => ({ name: p.getName(), type: p.getTypeNode()?.getText() ?? "unknown", optional: p.isOptional() || p.hasInitializer() })),
         returnType: (f.getReturnTypeNode()?.getText() ?? f.getReturnType().getText(f)).replace(/\s+/g, " ").slice(0, 600),
       };

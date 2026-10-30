@@ -1,6 +1,6 @@
 import type { AgentModel, Finding, PromptLine, RuleId, SourceLoc, ToolDef, ToolParam } from "../core/types.js";
 import { lineText } from "../scan/project.js";
-import { functionRules } from "./function-rules.js";
+import { functionRules, generalPromptRules } from "./function-rules.js";
 import { effectOf, isExecSink, isFsRead, isFsWrite, PII_FIELDS, words, type Effect } from "./effects.js";
 
 type Draft = Omit<Finding, "id" | "evidence" | "symbols"> & { symbols?: string[] };
@@ -9,11 +9,12 @@ const MONEY_PARAM = /amount|price|total|credit|refund|percent|discount|fee|balan
 const PATH_PARAM = /^(path|filePath|filepath|file|filename|fileName|dir|directory|target|dest|destination)$/;
 const DEST_PARAM = /^(to|recipient|recipients|email|url|uploadUrl|webhook|webhookUrl|endpoint|destination|address)$/i;
 const DANGEROUS_FLAGS = /^(force|hard|overwrite|skipVerify|noVerify|recursive|purge|prune|all)$/;
+const SECRET_PARAM = /^(private_?key|privateKey|secret(_?key)?|password|passphrase|mnemonic|seed_?phrase|api_?key|apiKey|access_?token|accessToken|auth_?token|authToken)$/i;
 const CODE_PARAM = /^(command|cmd|script|code|sql|query|where|statement|expression|shell)$/i;
 
 const AUTONOMY = /never ask|without (asking|check-?ins|confirmation|permission|approval)|act first|fully autonomous|move fast|single reply|don'?t wait|whenever you notice|proactively|just get (it|the task) done/i;
 const CAUTION = /approval|approve|careful|confirm|permission|verify|opted|opt-in|consent|manager|never (delete|share|reveal)|only\b/i;
-const POLICY = /\b(needs? (a |an )?[\w']*\s?(approval|confirmation|sign-?off|review)|requires?|must|only|never|always|approval|approve|confirm|verify|opted|opt-in|consent|at most|up to|no more than)\b|\b(over|above|more than|under|below) \$?\d/i;
+const POLICY = /\b(needs? (a |an )?[\w']*\s?(approval|confirmation|sign-?off|review)|requires? (approval|confirmation|a manager|sign-?off|review)|must (not|never|be approved|be confirmed)|never|always (ask|confirm|check|verify)|approv(al|e)|confirm(ation)?|verif(y|ied)|opted|opt-in|consent|at most|no more than|only (if|when|after|for|to|with) [\w ]*(who|that|which|have|has|are|is)?)\b|\b(over|above|more than|under|below|exceeds?) \$?\d/i;
 const FOLLOW = /follow (it|them|the|instructions)|do what (it|the page) says|and follow/i;
 const SHARE = /share|partner|export|send (the )?data|hand off/i;
 
@@ -33,8 +34,9 @@ export function runRules(model: AgentModel): Finding[] {
   // Tool-level prompt rules only make sense for tool-calling agents.
   if (model.tools.length) drafts.push(...promptRules(model, promptLines, effects));
   drafts.push(...functionRules(model));
+  drafts.push(...generalPromptRules(model, new Set(drafts.flatMap((d) => [d.loc, ...d.related]).map((l) => `${l.file}:${l.line}`))));
 
-  return dedupeIds(drafts.map((d) => finalize(model, d)));
+  return dedupeIds(mergeSiblings(drafts).map((d) => finalize(model, d)));
 }
 
 interface RuleCtx {
@@ -175,6 +177,19 @@ function toolRules(tool: ToolDef, effect: Effect, ctx: RuleCtx): Draft[] {
     });
   }
 
+  // Secrets the model has to see and choose, because they're tool parameters.
+  for (const p of tool.params.filter((p) => SECRET_PARAM.test(p.name))) {
+    out.push({
+      ...base,
+      rule: "secret-in-params",
+      severity: 5,
+      title: `${tool.name} takes \`${p.name}\` as a parameter, so the model handles it`,
+      param: p.name,
+      loc: p.loc,
+      facts: { secret: p.name, effect: effect.kind },
+    });
+  }
+
   // Sensitive fields returned to the model.
   const pii = piiFields(tool, true);
   if (piiFields(tool).length >= 2 && effect.kind === "read") {
@@ -219,6 +234,8 @@ function promptRules(model: AgentModel, lines: (PromptLine & { file: string })[]
     for (const tool of model.tools) {
       const toolWords = [tool.name, ...(tool.aliases ?? [])].flatMap(words).map(stem).filter((w) => !STOPWORDS.has(w));
       if (!toolWords.some((w) => lineWords.has(w))) continue;
+      // A line about what the agent may *say* ("Do not invent flight details") isn't a policy on the tool.
+      if (effects.get(tool.name)!.kind === "read" && !/\$\s?\d|approv|confirm|consent|opt/i.test(l.text)) continue;
       const amount = /\$\s?([\d,]+)|(\d+)\s?%/.exec(l.text);
       const numeric = tool.params.find((p) => p.type === "number" && MONEY_PARAM.test(p.name));
       const enforced = amount && numeric ? numeric.bounded || numeric.guarded : tool.hasApproval || enforcesInCode(tool, l.text);
@@ -303,7 +320,8 @@ function stem(w: string): string {
 }
 
 function flowsInto(param: string, args: string[]): boolean {
-  const re = new RegExp(`(^|[^\\w.])${param}\\b`);
+  // `command`, or Mastra-v0 style `context.command` / `input.command`.
+  const re = new RegExp(`(^|[^\\w.]|\\b(context|input|inputData|args|params|data|props)\\.)${param}\\b`);
   return args.some((a) => re.test(a));
 }
 
@@ -345,6 +363,44 @@ function finalize(model: AgentModel, d: Draft): Finding {
   };
 }
 
+/**
+ * Several web tools feeding the same dangerous tools are one risk, not five questions; two tools
+ * covered by the same prompt line are one policy. Merge them, keeping the rest as related lines.
+ */
+function mergeSiblings(drafts: Draft[]): Draft[] {
+  const out: Draft[] = [];
+  const groups = new Map<string, Draft[]>();
+  for (const d of drafts) {
+    const key =
+      d.rule === "injection-surface"
+        ? `inj:${[...((d.facts.dangerousTools as string[]) ?? [])].sort().join(",")}`
+        : d.rule === "prompt-unenforced-policy"
+          ? `pol:${d.loc.file}:${d.loc.line}`
+          : d.rule === "unrestricted-path"
+            ? `path:${d.facts.mode}`
+            : d.rule === "missing-limit" && d.facts.optional
+              ? `opt:${d.param}`
+              : undefined;
+    if (!key) out.push(d);
+    else groups.set(key, [...(groups.get(key) ?? []), d]);
+  }
+  for (const group of groups.values()) {
+    const [first, ...rest] = [...group].sort((a, b) => b.severity - a.severity);
+    if (!rest.length) {
+      out.push(first!);
+      continue;
+    }
+    const names = [first!.tool!, ...rest.map((r) => r.tool!)];
+    out.push({
+      ...first!,
+      related: [...first!.related, ...rest.map((r) => r.loc)],
+      symbols: [...new Set([...(first!.symbols ?? []), ...names])],
+      facts: { ...first!.facts, alsoTools: names.slice(1) },
+    });
+  }
+  return out;
+}
+
 function dedupeIds(findings: Finding[]): Finding[] {
   const seen = new Map<string, number>();
   return findings.map((f) => {
@@ -367,6 +423,7 @@ export const RULE_LABELS: Record<RuleId, string> = {
   "description-mismatch": "description promises less than the code allows",
   "prompt-autonomy-conflict": "prompt pushes autonomy over caution",
   "model-review": "found by model review",
+  "secret-in-params": "the model handles a secret",
   "prompt-output-rule": "prompt rule on an output nothing checks",
   "prompt-decision-rule": "prompt rule with no check in code",
   "untrusted-input-in-prompt": "untrusted text pasted into the prompt",

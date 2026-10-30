@@ -1,6 +1,6 @@
 import { Node, SyntaxKind } from "ts-morph";
 import type { AgentDef, ToolDef } from "../../core/types.js";
-import { declarationOf, getProp, importRefFor, isFromModule, locOf, resolveValue, stringValue } from "../project.js";
+import { agentRef, declarationOf, getProp, importRefFor, isFromModule, locOf, resolveValue, stringValue } from "../project.js";
 import { extractPrompt } from "../prompts.js";
 import { buildTool } from "../tool-shape.js";
 import type { Adapter } from "./types.js";
@@ -54,7 +54,7 @@ export const openaiAgents: Adapter = {
           }
         }
         const decl = expr.getParent();
-        const ref = importRefFor(ctx, decl);
+        const ref = agentRef(ctx, expr);
         agents.push({
           name: stringValue(getProp(cfg, "name")) ?? (decl && Node.isVariableDeclaration(decl) ? decl.getName() : "agent"),
           framework: "openai-agents",

@@ -1,6 +1,6 @@
 import { Node, SyntaxKind } from "ts-morph";
 import type { AgentDef, ToolDef } from "../../core/types.js";
-import { getProp, importRefFor, isFromModule, locOf, resolveValue, stringValue } from "../project.js";
+import { agentRef, getProp, importRefFor, isFromModule, locOf, resolveValue, stringValue } from "../project.js";
 import { extractPrompt } from "../prompts.js";
 import { buildTool, referencingKeys } from "../tool-shape.js";
 import type { Adapter } from "./types.js";
@@ -51,7 +51,7 @@ export const mastra: Adapter = {
             ? toolsObj.getProperties().map((p) => (p as { getName?: () => string }).getName?.() ?? "").filter(Boolean)
             : [];
         const decl = expr.getParent();
-        const ref = importRefFor(ctx, decl);
+        const ref = agentRef(ctx, expr);
         agents.push({
           name: stringValue(getProp(cfg, "name")) ?? (decl && Node.isVariableDeclaration(decl) ? decl.getName() : "agent"),
           framework: "mastra",

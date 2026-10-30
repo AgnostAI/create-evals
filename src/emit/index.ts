@@ -7,9 +7,7 @@ import { renderHarness } from "./harness.js";
 /** Versions we generate code against. */
 const DEP_VERSIONS: Record<string, string> = {
   vitest: "^5.0.5",
-  ai: "^7.0.157",
-  "@ai-sdk/anthropic": "^4.0.92",
-  zod: "^4.6.7",
+  "@anthropic-ai/sdk": "^1.3.0",
 };
 
 export interface EmitOptions {
@@ -84,7 +82,7 @@ function patchPackageJson(model: AgentModel, runner: TestRunner, usesJudge: bool
 
   const needed = [
     ...(runner === "vitest" && !has("vitest") ? ["vitest"] : []),
-    ...(usesJudge ? ["ai", "@ai-sdk/anthropic", "zod"].filter((d) => !has(d)) : []),
+    ...(usesJudge && !has("@anthropic-ai/sdk") ? ["@anthropic-ai/sdk"] : []),
   ];
   pkg.devDependencies = { ...pkg.devDependencies };
   for (const d of needed) pkg.devDependencies[d] = DEP_VERSIONS[d]!;
