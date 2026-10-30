@@ -1,0 +1,59 @@
+{
+  "name": "create-evals",
+  "version": "0.1.0",
+  "description": "Reads your AI agent's code, asks 10 yes/no questions grounded in it, and writes 10 runnable evals into your repo.",
+  "type": "module",
+  "bin": {
+    "create-evals": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "skill"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "sync:agents": "node scripts/sync-agents-md.mjs",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build",
+    "demo": "npm run build && node scripts/record-demo.mjs"
+  },
+  "keywords": [
+    "evals",
+    "llm",
+    "ai-agents",
+    "testing",
+    "vitest",
+    "jest",
+    "ai-sdk",
+    "mastra",
+    "openai-agents"
+  ],
+  "author": "Agnost AI",
+  "homepage": "https://github.com/AgnostAI/create-evals",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AgnostAI/create-evals.git"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.92",
+    "@clack/prompts": "^1.8.1",
+    "ai": "^7.0.157",
+    "picocolors": "^1.1.1",
+    "ts-morph": "^28.0.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "tsup": "^9.0.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

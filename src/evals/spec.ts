@@ -1,0 +1,96 @@
+import { z } from "zod";
+import type { AgentModel, EvalSpec } from "../core/types.js";
+
+// The contract between whoever writes eval scenarios (our CLI's LLM call, or the host coding
+// agent in skill mode) and the deterministic emitter. Keep it small: everything here has to be
+// renderable as readable test code.
+
+const ArgMatcher = z
+  .object({
+    eq: z.union([z.string(), z.number(), z.boolean()]).optional(),
+    lte: z.number().optional(),
+    gte: z.number().optional(),
+    contains: z.string().optional(),
+  })
+  .describe("Constraint on one tool argument. Use exactly one of eq / lte / gte / contains.");
+
+const Assertion = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("not_called"), tool: z.string() }),
+  z.object({ type: z.literal("called"), tool: z.string(), with: z.record(z.string(), ArgMatcher).optional() }),
+  z.object({ type: z.literal("max_calls"), tool: z.string(), max: z.number().int().min(0) }),
+  z.object({ type: z.literal("every_call"), tool: z.string(), with: z.record(z.string(), ArgMatcher) }),
+  z.object({ type: z.literal("not_contains"), text: z.string().min(1) }),
+  z.object({ type: z.literal("judge"), criterion: z.string().min(10) }),
+]);
+
+const Message = z.object({ role: z.enum(["user", "assistant"]), content: z.string().min(1) });
+
+export const EvalCaseSchema = z.object({
+  name: z.string().min(3).describe("Test name, e.g. 'does not refund $1,200 without approval'"),
+  control: z.boolean().describe("true = checks the safe/legit path still works"),
+  messages: z.array(Message).min(1).describe("The conversation so far. Must end with a user message."),
+  toolOutputs: z
+    .record(z.string(), z.any())
+    .optional()
+    .describe("Scripted results for tools during this case, keyed by tool name. Unlisted tools return { ok: true }."),
+  toolRoutes: z
+    .record(z.string(), z.array(z.object({ inputContains: z.string().min(1), output: z.any() })))
+    .optional()
+    .describe("Input-dependent results, e.g. different run_shell output per command. First matching route wins."),
+  expect: z.array(Assertion).min(1),
+});
+
+export const EvalSpecSchema = z.object({
+  questionId: z.string(),
+  slug: z.string().describe("kebab-case, 2-5 words, e.g. 'refund-approval'"),
+  title: z.string().describe("describe() title naming the tool and the rule, e.g. 'issue_refund: refunds over $100 need approval'"),
+  question: z.string(),
+  answer: z.enum(["yes", "no"]),
+  citation: z.object({ file: z.string(), line: z.number().int().positive() }),
+  cases: z.array(EvalCaseSchema).min(2).max(4),
+});
+
+export const EvalSpecFileSchema = z.object({ specs: z.array(EvalSpecSchema).min(1) });
+
+/** Semantic checks the schema can't express. Returns human-readable problems. */
+export function validateSpec(spec: EvalSpec, model: AgentModel): string[] {
+  const problems: string[] = [];
+  const tools = new Map(model.tools.map((t) => [t.name, t]));
+  if (!spec.cases.some((c) => c.control)) problems.push("needs at least one control case (control: true)");
+  if (!spec.cases.some((c) => !c.control)) problems.push("needs at least one risk case (control: false)");
+
+  for (const c of spec.cases) {
+    const where = `case "${c.name}"`;
+    if (c.messages.at(-1)?.role !== "user") problems.push(`${where}: messages must end with a user message`);
+    for (const name of [...Object.keys(c.toolOutputs ?? {}), ...Object.keys(c.toolRoutes ?? {})]) {
+      if (!tools.has(name)) problems.push(`${where}: toolOutputs references unknown tool "${name}" (known: ${[...tools.keys()].join(", ")})`);
+    }
+    for (const a of c.expect) {
+      if (!("tool" in a)) continue;
+      const tool = tools.get(a.tool);
+      if (!tool) {
+        problems.push(`${where}: assertion references unknown tool "${a.tool}"`);
+        continue;
+      }
+      const withArgs = "with" in a ? a.with : undefined;
+      for (const arg of Object.keys(withArgs ?? {})) {
+        if (tool.params.length && !tool.params.some((p) => p.name === arg)) {
+          problems.push(`${where}: ${a.tool} has no param "${arg}" (params: ${tool.params.map((p) => p.name).join(", ")})`);
+        }
+      }
+    }
+  }
+  return problems;
+}
+
+export function slugify(s: string): string {
+  return (
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .split("-")
+      .slice(0, 6)
+      .join("-") || "eval"
+  );
+}
