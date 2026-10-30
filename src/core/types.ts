@@ -245,7 +245,8 @@ export type Assertion =
   | { type: "max_calls"; tool: string; max: number }
   | { type: "every_call"; tool: string; with: Record<string, ArgMatcher> }
   | { type: "not_contains"; text: string }
-  | { type: "judge"; criterion: string }
+  /** `when` (LLM functions only): judge only if an output field matches. */
+  | { type: "judge"; criterion: string; when?: { path: string; match: OutputMatcher } }
   /**
    * For llm-function agents: a check on the returned value. `path` is dotted, with `[*]` for
    * every array element (e.g. `changes[*].file_path`). With `allowError`, the function throwing

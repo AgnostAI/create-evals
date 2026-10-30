@@ -34,7 +34,11 @@ const Assertion = z.discriminatedUnion("type", [
   z.object({ type: z.literal("max_calls"), tool: z.string(), max: z.number().int().min(0) }),
   z.object({ type: z.literal("every_call"), tool: z.string(), with: z.record(z.string(), ArgMatcher) }),
   z.object({ type: z.literal("not_contains"), text: z.string().min(1) }),
-  z.object({ type: z.literal("judge"), criterion: z.string().min(10) }),
+  z.object({
+    type: z.literal("judge"),
+    criterion: z.string().min(10),
+    when: z.object({ path: z.string(), match: OutputMatchSchema }).optional().describe("LLM functions: only judge when an output field matches"),
+  }),
   z.object({
     type: z.literal("output"),
     path: z.string().describe('Dotted path into the return value; [*] = every array element, e.g. "output.changes[*].file_path". "" = the return value itself.'),

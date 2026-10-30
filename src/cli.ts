@@ -39,7 +39,9 @@ ${pc.bold("Usage")}
   npx create-evals emit [file]        validate eval specs and write tests (default .create-evals/specs.json)
   npx create-evals harness            write evals/harness.ts now (to wire it before writing specs)
   npx create-evals verify             typecheck the evals, check the harness is wired and the test runner picks them up
-  npx create-evals try [--runs N]     run the evals N times; each test shows as passed, failed, or flaky, with why
+  npx create-evals try [--runs N] [--verbose]
+                                      run the evals N times; each test shows as passed, failed, or flaky,
+                                      with why (exits 1 on any failure or flake)
   npx create-evals skill [--agents]   install the skill into .claude/skills (and AGENTS.md with --agents)
 
 ${pc.bold("Options")}
@@ -60,6 +62,7 @@ interface Flags {
   install: boolean;
   force?: boolean;
   agents?: boolean;
+  verbose?: boolean;
   help?: boolean;
   version?: boolean;
 }
@@ -72,6 +75,7 @@ function parseArgs(argv: string[]): Flags {
     else if (a === "--no-install") flags.install = false;
     else if (a === "--force") flags.force = true;
     else if (a === "--agents") flags.agents = true;
+    else if (a === "--verbose") flags.verbose = true;
     else if (a === "--help" || a === "-h") flags.help = true;
     else if (a === "--version" || a === "-v") flags.version = true;
     else if (a === "--model" || a === "--answers" || a === "--out" || a === "--runs") flags[a.slice(2) as "model" | "answers" | "out" | "runs"] = argv[++i];
@@ -219,7 +223,7 @@ function cmdTry(root: string, flags: Flags) {
   const runner = w.model.runner ?? "vitest";
   const report = path.join(root, ".create-evals", "try.json");
   mkdirSync(path.dirname(report), { recursive: true });
-  const results = new Map<string, { status: string[]; message?: string; file: string }>();
+  const results = new Map<string, { status: string[]; message?: string; full?: string; file: string }>();
 
   for (let i = 0; i < runs; i++) {
     const s = p.spinner();
@@ -234,7 +238,10 @@ function cmdTry(root: string, flags: Flags) {
       for (const t of file.assertionResults) {
         const entry = results.get(t.fullName) ?? { status: [], file: path.relative(root, file.name) };
         entry.status.push(t.status);
-        if (t.status === "failed" && !entry.message) entry.message = firstLine(t.failureMessages?.join("\n") ?? "", root, rel);
+        if (t.status === "failed" && !entry.message) {
+          entry.message = firstLine(t.failureMessages?.join("\n") ?? "", root, rel);
+          entry.full = (t.failureMessages ?? []).join("\n").replace(/\x1b\[[0-9;]*m/g, "").split("\n").filter((l) => !/^\s+at /.test(l)).join("\n");
+        }
         results.set(t.fullName, entry);
       }
     }
@@ -249,7 +256,8 @@ function cmdTry(root: string, flags: Flags) {
     const mark = skipped ? pc.dim("–") : passes === r.status.length ? pc.green("✔") : passes === 0 ? pc.red("✖") : pc.yellow("~");
     if (!skipped && passes === 0) failed++;
     else if (!skipped && passes < r.status.length) flaky++;
-    const line = `  ${mark} ${name.replace(/^.*? > /, "")}${runs > 1 && !skipped ? pc.dim(` (${passes}/${r.status.length})`) : ""}${r.message && passes < r.status.length ? `\n      ${pc.dim(r.message)}` : ""}`;
+    const detail = r.message && passes < r.status.length ? (flags.verbose && r.full ? `\n${indentText(r.full, 6)}` : `\n      ${pc.dim(r.message)}`) : "";
+    const line = `  ${mark} ${name.replace(/^.*? > /, "")}${runs > 1 && !skipped ? pc.dim(` (${passes}/${r.status.length})`) : ""}${detail}`;
     byFile.set(r.file, [...(byFile.get(r.file) ?? []), line]);
   }
   for (const [file, lines] of byFile) console.log(`${pc.bold(file)}\n${lines.join("\n")}`);
@@ -258,11 +266,15 @@ function cmdTry(root: string, flags: Flags) {
   if (failed || flaky) {
     console.log(
       pc.dim(
-        "For each failure: a failing control or an over-broad judge is usually a badly written eval (fix the spec and re-emit); a failing risk case is usually a real catch (tell the developer). Flaky never-cases are worth a `repeat`.",
+        "For each failure: a failing control or an over-broad judge is usually a badly written eval (fix the spec and re-emit); a failing risk case is usually a real catch (tell the developer). Flaky never-cases are worth a `repeat`. Add --verbose for each failure's full transcript.",
       ),
     );
     process.exit(1);
   }
+}
+
+function indentText(text: string, n: number): string {
+  return text.split("\n").map((l) => " ".repeat(n) + l).join("\n");
 }
 
 function firstLine(message: string, root = "", rel = "evals"): string {
@@ -273,7 +285,7 @@ function firstLine(message: string, root = "", rel = "evals"): string {
   const other = /(?:Error|AssertionError): ([^\n]*)/.exec(clean)?.[1];
   let text = judge ? `judge: ${judge}` : expected ?? other ?? clean.split("\n")[0] ?? "";
   // Show which check failed: the assertion's own source line, from the stack.
-  const at = new RegExp(`${rel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/([^:\\s)]+):(\\d+):\\d+`).exec(clean);
+  const at = new RegExp(`${rel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/([^:\\s)]+\\.eval\\.test\\.[cm]?[jt]s):(\\d+):\\d+`).exec(clean);
   if (!judge && at && root) {
     const src = readFileSync(path.join(root, rel, at[1]!), "utf8").split("\n")[Number(at[2]) - 1]?.trim();
     if (src) text = `${src.replace(/, run\.transcript\(\)/, "")}  →  ${text}`;
@@ -486,7 +498,7 @@ function printFinish(a: { model: ReturnType<typeof analyze>["model"]; findings: 
       noun: a.model.tools.length ? "tools" : fns.length === 1 ? "LLM function" : "LLM functions",
       // Only the scanner's findings back the "no guardrails" number; in map mode, just report what was mapped.
       unguarded: a.findings.length ? unguardedTools(a.findings) : undefined,
-      unguardedLabel: a.model.tools.length ? "had no guardrails" : "have prompt rules nothing enforces",
+      unguardedLabel: a.model.tools.length ? "had no guardrails" : unguardedTools(a.findings) === 1 ? "has prompt rules nothing enforces" : "have prompt rules nothing enforces",
       evals: files.length,
       files,
       runCommand,

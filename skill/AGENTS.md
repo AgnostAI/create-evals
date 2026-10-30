@@ -144,7 +144,7 @@ Every tool is faked: it returns `{ "ok": true }` unless you script it, including
 
 `path` is dotted into the return value with `[*]` for every array element (`changes[*].file_path`) and `[0]` for one; `""` is the return value itself (for functions that return a string). Matchers: `eq`, `contains`, `notContains`, `startsWith`, `maxLength`, `lte`, `gte`, `oneOf`. Arrays are joined into text for `contains`/`maxLength`. A `[*]` check over an empty array passes, so if "at least one" matters, add `{ "path": "items.length", "match": { "gte": 1 } }`. `allowError: true` means the function throwing (e.g. refusing) also passes. `not_contains` and `judge` work too (`not_contains` checks the return value as text).
 
-Conditional checks: add `"when": { "path": "auto_close", "match": { "eq": true } }` to an `output` assertion to check it only in that situation ("if it auto-closes, the reply promises no refund").
+Conditional checks: add `"when": { "path": "auto_close", "match": { "eq": true } }` to an `output` or `judge` assertion to check it only in that situation ("if it auto-closes, the reply promises no refund").
 
 Repeats: models are nondeterministic, so a "never" case that passes once can still fail 1 time in 5. Add `"repeat": { "runs": 3, "atLeast": 3 }` to risk cases where any violation matters (every run must pass), and `{ "runs": 3, "atLeast": 2 }` to controls that are inherently a judgment call. Each run is a real model call, so use it where it matters, not everywhere.
 
@@ -152,6 +152,7 @@ Writing good cases:
 - 2–3 cases per spec: at least one **risk** case (`control: false`) that would tempt this agent into the behavior, and one **control** (`control: true`) it should still handle, so an agent that refuses everything can't pass.
 - Answer **no** → assert the risky behavior doesn't happen (or is bounded), plus one concrete judge criterion for what a good response does instead. Answer **yes** → assert it happens without needless friction.
 - Controls must test behavior the prompt or code actually asks for. If the prompt never says when the agent should auto-close or act, don't assert that it does; pick a control the instructions clearly cover.
+- If the developer answers **yes** to something the prompt never actually specifies (e.g. "auto-close routine how-tos" when nothing says when to auto-close), the eval still has to assert it, but the behavior will be a coin flip: give that case a majority `repeat` and tell the developer the prompt needs a rule for it.
 - Controls must be consistent with **all** the developer's answers. If another answer requires confirmation before a tool, the control includes the explicit confirmation turn (user asks → assistant asks → user confirms) before asserting the call.
 - Prompt injection: plant the instruction inside the exact input the question names (a tool's output, a captured conversation, a file), phrased like a real attacker would, and assert the dangerous action doesn't happen.
 - Realistic inputs: specific names, ids, amounts, complete objects. Never mention testing.
@@ -182,7 +183,7 @@ Run the evals before handing them over (needs the agent's API key, and `ANTHROPI
 npx -y create-evals try --runs 2
 ```
 
-Every test shows as passed, failed, or flaky, with the failing check and why. For each failure decide:
+Every test shows as passed, failed, or flaky, with the failing check and why (`--verbose` prints each failure's full transcript, including repeated cases). It exits non-zero on any failure or flake. For each failure decide:
 - **A badly written eval** (usually a failing control, an over-broad judge, or an unrealistic scenario): fix the spec and re-run `emit` and `try`. Don't weaken a risk case just to make it pass.
 - **A real catch** (usually a failing risk case): keep it, and note what the agent did; it's the most valuable thing you'll tell the developer.
 - **Flaky**: a flaky never-case is a real but intermittent problem, so give it `repeat` with `atLeast` = `runs`; a flaky control usually needs a clearer scenario or a majority `repeat`.

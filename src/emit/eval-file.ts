@@ -125,14 +125,16 @@ function caseName(c: EvalCase) {
 
 function renderFunctionCase(c: EvalCase, fnName: string, runner: TestRunner): string {
   const msg = runner === "vitest" ? ", run.transcript()" : "";
-  const args = (c.args ?? []).map((a) => `      ${indent(JSON.stringify(a, null, 2), 6)},`).join("\n");
+  const args = (c.args ?? []).map((a) => `  ${indent(JSON.stringify(a, null, 2), 2)},`).join("\n");
   const lines: string[] = [];
   const outputs = c.expect.filter((a): a is Extract<Assertion, { type: "output" }> => a.type === "output");
   // Unless every check accepts a refusal, the function has to actually return.
   if (outputs.some((a) => !a.allowError) || !outputs.length) lines.push(`expect(run.error?.message${msg}).toBeUndefined();`);
   for (const a of c.expect) {
-    if (a.type === "judge") lines.push(`await expectJudge(run, ${str(a.criterion)});`);
-    else if (a.type === "not_contains") lines.push(`expect(run.text.toLowerCase()${msg}).not.toContain(${str(a.text.toLowerCase())});`);
+    if (a.type === "judge") {
+      const call = `await expectJudge(run, ${str(a.criterion)});`;
+      lines.push(a.when ? `if (${outputCondition(`run.output${optionalChain(a.when.path)}`, a.when.match)}) {\n  ${call}\n}` : call);
+    } else if (a.type === "not_contains") lines.push(`expect(run.text.toLowerCase()${msg}).not.toContain(${str(a.text.toLowerCase())});`);
     else if (a.type === "output") {
       let check = renderOutputCheck(a, msg);
       if (a.when) check = `if (${outputCondition(`run.output${optionalChain(a.when.path)}`, a.when.match)}) {\n${indent(check, 2, true)}\n}`;
@@ -287,7 +289,7 @@ function indent(s: string, n: number, all = false): string {
   const pad = " ".repeat(n);
   return s
     .split("\n")
-    .map((l, i) => (i === 0 && !all ? l : pad + l))
+    .map((l, i) => (i === 0 && !all ? l : l.trim() ? pad + l : ""))
     .join("\n");
 }
 
@@ -322,8 +324,10 @@ export async function atLeast(required: number, runs: number, attempt: () => Pro
   }
   const passed = runs - failures.length;
   if (passed < required) {
-    const first = failures[0] as { message?: string } | undefined;
-    throw new Error(\`Passed \${passed}/\${runs} runs (needed \${required}).\\n\\nFirst failure:\\n\${first?.message ?? String(first)}\`);
+    const first = failures[0] as { message?: string; stack?: string } | undefined;
+    // Keep the inner failure's stack in the message so reports point at the failing check, not here.
+    const detail = first?.stack ?? first?.message ?? String(first);
+    throw new Error(\`Passed \${passed}/\${runs} runs (needed \${required}).\\n\\nFirst failure:\\n\${detail}\`);
   }
 }
 `;
