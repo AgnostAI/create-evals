@@ -28,9 +28,26 @@ export function createAgent(calendar: Calendar, clock: () => Temporal.Instant = 
       });
       // `result.response.messages` holds only the last step; the tool calls and results live in
       // the earlier steps, and the agent needs those next turn to know what it actually did.
-      return { text: result.text, messages: result.steps.flatMap((step) => step.response.messages) };
+      const messages = withoutDanglingToolCalls(result.steps.flatMap((step) => step.response.messages));
+      // The model can stop without a reply (e.g. a content filter mid-turn). Never leave the guest
+      // facing silence, and keep the history valid so the next turn still works.
+      if (!result.text.trim()) {
+        const text = "Sorry, I couldn't handle that last message. Could you rephrase it? I can still help you find a time and book a meeting with " + config.ownerName + ".";
+        return { text, messages: [...messages, { role: "assistant", content: text }] };
+      }
+      return { text: result.text, messages };
     },
   };
+}
+
+/** Drops tool calls that never got a result (a turn cut short), which would break every later turn. */
+function withoutDanglingToolCalls(messages: ModelMessage[]): ModelMessage[] {
+  const answered = new Set(messages.flatMap((m) => (m.role === "tool" ? m.content.flatMap((p) => ("toolCallId" in p ? [p.toolCallId] : [])) : [])));
+  return messages.flatMap((m) => {
+    if (m.role !== "assistant" || typeof m.content === "string") return [m];
+    const content = m.content.filter((p) => p.type !== "tool-call" || answered.has(p.toolCallId));
+    return content.length ? [{ ...m, content }] : [];
+  });
 }
 
 export const agent = createAgent(googleCalendar);
