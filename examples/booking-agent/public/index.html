@@ -44,7 +44,7 @@
 </main>
 <script>
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const messages = [];
+  let sessionId;
   const log = document.getElementById("log");
   const form = document.getElementById("form");
   const input = document.getElementById("input");
@@ -76,20 +76,18 @@
     const text = input.value.trim();
     if (!text || send.disabled) return;
     input.value = ""; input.style.height = "auto";
-    messages.push({ role: "user", content: text });
     bubble("user", text);
     const typing = bubble("assistant typing", "…");
     send.disabled = true;
     try {
-      const res = await fetch("/api/chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ messages, timeZone }) });
+      const res = await fetch("/api/chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sessionId, message: text, timeZone }) });
       const body = await res.json();
       typing.remove();
       if (!res.ok) throw new Error(body.error || "Something went wrong.");
-      messages.push({ role: "assistant", content: body.reply });
+      sessionId = body.sessionId;
       bubble("assistant", body.reply);
     } catch (err) {
       typing.remove();
-      messages.pop();
       input.value = text;
       bubble("error", err.message);
     } finally {

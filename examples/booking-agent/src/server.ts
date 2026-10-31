@@ -1,12 +1,33 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
 import type { ModelMessage } from "ai";
-import { chat } from "./agent.js";
+import { agent } from "./agent.js";
 import { config } from "./config.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
-const MAX_MESSAGES = 40;
+const MAX_TURNS = 40;
 const MAX_CHARS = 4000;
+const SESSION_TTL_MS = 2 * 60 * 60_000;
+
+// Conversations live on the server, tool calls and results included: the agent needs its own
+// earlier actions to stay truthful, and a browser-supplied history could be forged.
+interface Session {
+  history: ModelMessage[];
+  turns: number;
+  timeZone: string;
+  touched: number;
+}
+const sessions = new Map<string, Session>();
+function session(id: unknown, timeZone: string): [string, Session] {
+  const now = Date.now();
+  for (const [key, s] of sessions) if (now - s.touched > SESSION_TTL_MS) sessions.delete(key);
+  const existing = typeof id === "string" ? sessions.get(id) : undefined;
+  if (existing) return [id as string, existing];
+  const fresh: Session = { history: [], turns: 0, timeZone, touched: now };
+  const key = crypto.randomUUID();
+  sessions.set(key, fresh);
+  return [key, fresh];
+}
 
 // A small per-IP limit so a public page can't run up the model bill.
 const WINDOW_MS = 10 * 60_000;
@@ -36,21 +57,17 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   return JSON.parse(raw);
 }
 
-/** The browser keeps the conversation; check it's a sane one before it reaches the model. */
-function parseChat(body: unknown): { messages: ModelMessage[]; timeZone: string } | undefined {
-  const { messages, timeZone } = (body ?? {}) as { messages?: unknown; timeZone?: unknown };
-  if (!Array.isArray(messages) || !messages.length || messages.length > MAX_MESSAGES) return undefined;
-  const ok = messages.every(
-    (m) => (m?.role === "user" || m?.role === "assistant") && typeof m.content === "string" && m.content.length > 0 && m.content.length <= MAX_CHARS,
-  );
-  if (!ok || messages.at(-1).role !== "user") return undefined;
+/** One new guest message, plus the session it belongs to (if any) and the browser's time zone. */
+function parseChat(body: unknown): { sessionId?: unknown; message: string; timeZone: string } | undefined {
+  const { sessionId, message, timeZone } = (body ?? {}) as { sessionId?: unknown; message?: unknown; timeZone?: unknown };
+  if (typeof message !== "string" || !message.trim() || message.length > MAX_CHARS) return undefined;
   let tz = config.timeZone;
   try {
     if (typeof timeZone === "string") tz = Temporal.Now.zonedDateTimeISO(timeZone).timeZoneId;
   } catch {
     // Unknown zone: fall back to the owner's.
   }
-  return { messages: messages.map((m) => ({ role: m.role, content: m.content })), timeZone: tz };
+  return { sessionId, message: message.trim(), timeZone: tz };
 }
 
 createServer(async (req, res) => {
@@ -63,9 +80,15 @@ createServer(async (req, res) => {
       const ip = (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0].trim() ?? req.socket.remoteAddress ?? "?";
       if (limited(ip)) return send(res, 429, { error: "Too many messages. Try again in a few minutes." });
       const input = parseChat(await readJson(req));
-      if (!input) return send(res, 400, { error: "That conversation doesn't look right. Reload the page and try again." });
-      const reply = await chat(input.messages, input.timeZone);
-      return send(res, 200, { reply });
+      if (!input) return send(res, 400, { error: "That message doesn't look right. Please try again." });
+      const [sessionId, s] = session(input.sessionId, input.timeZone);
+      if (s.turns >= MAX_TURNS) return send(res, 429, { error: "This conversation is too long. Reload the page to start a new one." });
+      const history: ModelMessage[] = [...s.history, { role: "user", content: input.message }];
+      const reply = await agent.respond(history, s.timeZone);
+      s.history = [...history, ...reply.messages];
+      s.turns++;
+      s.touched = Date.now();
+      return send(res, 200, { sessionId, reply: reply.text });
     }
     send(res, 404, { error: "Not found" });
   } catch (err) {

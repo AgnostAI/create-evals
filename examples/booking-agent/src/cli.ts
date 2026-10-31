@@ -1,6 +1,6 @@
 import readline from "node:readline/promises";
 import type { ModelMessage } from "ai";
-import { chat } from "./agent.js";
+import { agent } from "./agent.js";
 import { config } from "./config.js";
 
 // Chat with the agent in a terminal, as a guest would on the web page.
@@ -12,7 +12,7 @@ for (;;) {
   const text = await rl.question("you › ");
   if (!text.trim()) continue;
   messages.push({ role: "user", content: text });
-  const reply = await chat(messages, timeZone);
-  messages.push({ role: "assistant", content: reply });
-  console.log(`\nassistant › ${reply}\n`);
+  const reply = await agent.respond(messages, timeZone);
+  messages.push(...reply.messages);
+  console.log(`\nassistant › ${reply.text}\n`);
 }

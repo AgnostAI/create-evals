@@ -2,6 +2,7 @@
 import { config } from "./config.js";
 import { requireEnv } from "./env.js";
 import type { Interval } from "./availability.js";
+import type { Booking, Calendar, NewBooking } from "./calendar.js";
 
 export const SCOPES = ["https://www.googleapis.com/auth/calendar.events", "https://www.googleapis.com/auth/calendar.freebusy"];
 const API = "https://www.googleapis.com/calendar/v3";
@@ -42,7 +43,7 @@ async function gcal<T>(method: string, path: string, opts: { query?: Record<stri
 const cal = () => `/calendars/${encodeURIComponent(config.calendarId)}`;
 
 /** Busy blocks across the booking calendar and any extra busy calendars. Titles never leave Google. */
-export async function busyBetween(from: Temporal.Instant, to: Temporal.Instant): Promise<Interval[]> {
+async function busyBetween(from: Temporal.Instant, to: Temporal.Instant): Promise<Interval[]> {
   const ids = [config.calendarId, ...config.busyCalendars];
   const res = await gcal<{ calendars: Record<string, { busy?: { start: string; end: string }[]; errors?: { reason: string }[] }> }>("POST", "/freeBusy", {
     body: { timeMin: from.toString(), timeMax: to.toString(), items: ids.map((id) => ({ id })) },
@@ -51,18 +52,6 @@ export async function busyBetween(from: Temporal.Instant, to: Temporal.Instant):
     if (c.errors?.length) throw new Error(`Can't read free/busy for ${id}: ${c.errors.map((e) => e.reason).join(", ")}`);
     return (c.busy ?? []).map((b) => ({ start: Temporal.Instant.from(b.start), end: Temporal.Instant.from(b.end) }));
   });
-}
-
-/** What the agent stores on events it creates, so it can find (only) its own bookings later. */
-export interface Booking {
-  id: string;
-  code: string;
-  guestName: string;
-  guestEmail: string;
-  topic: string;
-  start: Temporal.Instant;
-  end: Temporal.Instant;
-  meetLink?: string;
 }
 
 interface GEvent {
@@ -91,14 +80,14 @@ function toBooking(e: GEvent): Booking | undefined {
 }
 
 /** Meetings this agent booked that start inside [from, to). */
-export async function agentBookingsBetween(from: Temporal.Instant, to: Temporal.Instant): Promise<Booking[]> {
+async function agentBookingsBetween(from: Temporal.Instant, to: Temporal.Instant): Promise<Booking[]> {
   const res = await gcal<{ items: GEvent[] }>("GET", `${cal()}/events`, {
     query: { privateExtendedProperty: `bookedBy=${AGENT_TAG.bookedBy}`, timeMin: from.toString(), timeMax: to.toString(), singleEvents: "true", maxResults: "50" },
   });
   return res.items.map(toBooking).filter((b): b is Booking => !!b && Temporal.Instant.compare(b.start, from) >= 0);
 }
 
-export async function findBookingByCode(code: string): Promise<Booking | undefined> {
+async function findBookingByCode(code: string): Promise<Booking | undefined> {
   const res = await gcal<{ items: GEvent[] }>("GET", `${cal()}/events`, {
     query: { privateExtendedProperty: `bookingCode=${code}`, singleEvents: "true", maxResults: "5" },
   });
@@ -106,7 +95,8 @@ export async function findBookingByCode(code: string): Promise<Booking | undefin
 }
 
 /** Creates the event with a Google Meet link; Google emails the invite to the guest. */
-export async function createBooking(b: Omit<Booking, "id" | "meetLink">, ownerName: string): Promise<Booking> {
+async function createBooking(b: NewBooking): Promise<Booking> {
+  const ownerName = config.ownerName;
   const reschedule = config.publicUrl ? ` at ${config.publicUrl}` : "";
   const event = await gcal<GEvent>("POST", `${cal()}/events`, {
     query: { conferenceDataVersion: "1", sendUpdates: "all" },
@@ -123,7 +113,7 @@ export async function createBooking(b: Omit<Booking, "id" | "meetLink">, ownerNa
   return toBooking(event)!;
 }
 
-export async function moveBooking(id: string, start: Temporal.Instant, end: Temporal.Instant): Promise<Booking> {
+async function moveBooking(id: string, start: Temporal.Instant, end: Temporal.Instant): Promise<Booking> {
   const event = await gcal<GEvent>("PATCH", `${cal()}/events/${encodeURIComponent(id)}`, {
     query: { sendUpdates: "all" },
     body: { start: { dateTime: start.toString(), timeZone: config.timeZone }, end: { dateTime: end.toString(), timeZone: config.timeZone } },
@@ -131,7 +121,7 @@ export async function moveBooking(id: string, start: Temporal.Instant, end: Temp
   return toBooking(event)!;
 }
 
-export async function cancelBooking(id: string): Promise<void> {
+async function cancelBooking(id: string): Promise<void> {
   await gcal<void>("DELETE", `${cal()}/events/${encodeURIComponent(id)}`, { query: { sendUpdates: "all" } });
 }
 
@@ -139,3 +129,5 @@ export async function cancelBooking(id: string): Promise<void> {
 export async function calendarInfo(): Promise<{ summary: string; timeZone: string }> {
   return gcal("GET", `${cal()}/events`, { query: { maxResults: "1" } });
 }
+
+export const googleCalendar: Calendar = { busyBetween, agentBookingsBetween, findBookingByCode, createBooking, moveBooking, cancelBooking };

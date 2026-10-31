@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { openSlots, slotProblem, without, type Rules } from "../src/availability.ts";
+import { openSlots, slotProblem, without, type Rules } from "../src/availability.js";
 
 const rules: Rules = {
   timeZone: "Asia/Kolkata",
