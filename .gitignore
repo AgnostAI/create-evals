@@ -7,3 +7,4 @@ fixtures/*/node_modules/
 fixtures/*/evals/
 fixtures/*/.create-evals/
 *.tgz
+examples/*/node_modules/
