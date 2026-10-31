@@ -1,11 +1,14 @@
 {
-  "name": "scheduler-agent",
+  "name": "booking-agent",
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
     "chat": "tsx src/cli.ts",
+    "auth": "tsx src/auth.ts",
     "typecheck": "tsc --noEmit",
-    "try": "tsx src/try.ts"
+    "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.92",
