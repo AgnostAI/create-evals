@@ -226,7 +226,8 @@ function cmdTry(root: string, flags: Flags) {
   const results = new Map<string, { status: string[]; message?: string; full?: string; file: string }>();
 
   for (let i = 0; i < runs; i++) {
-    const s = p.spinner();
+    // Coding agents read this output; spinners only make sense in a real terminal.
+    const s = process.stdout.isTTY ? p.spinner() : { start: (m: string) => console.log(m), stop: (m: string) => console.log(m) };
     s.start(`Running the evals${runs > 1 ? ` (${i + 1}/${runs})` : ""}`);
     const bin = path.join(root, "node_modules", ".bin", runner);
     const args = runner === "jest" ? [rel, "--json", `--outputFile=${report}`] : ["run", rel, "--reporter=json", `--outputFile=${report}`];
