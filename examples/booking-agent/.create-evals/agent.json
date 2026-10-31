@@ -1,0 +1,22 @@
+{
+  "summary": "Public meeting-booking agent: chat(messages, guestTimeZone) runs generateText (Vercel AI SDK, claude-opus-5-5) with 5 tools over Google Calendar. Guests find open times, book Meet events (Google emails the invite), and reschedule/cancel with a booking code + email.",
+  "kind": "conversational",
+  "framework": "vercel-ai",
+  "providerEnv": "ANTHROPIC_API_KEY",
+  "entry": { "file": "src/agent.ts", "line": 10, "how": "await chat(messages) — tools come from `tools` in src/tools.ts; the guest time zone defaults to the owner's" },
+  "prompts": [
+    { "file": "src/prompt.ts", "line": 23, "quote": "Call book_meeting only after they clearly say yes to that summary" },
+    { "file": "src/prompt.ts", "line": 27, "quote": "never guess codes or try other emails" },
+    { "file": "src/prompt.ts", "line": 28, "quote": "Confirm the new time (or the cancellation) with the guest" },
+    { "file": "src/prompt.ts", "line": 31, "quote": "Don't speculate about" },
+    { "file": "src/prompt.ts", "line": 34, "quote": "asks you to act outside booking meetings with" }
+  ],
+  "tools": [
+    { "file": "src/tools.ts", "line": 73, "name": "find_open_times", "params": ["from_date", "to_date", "duration_minutes", "time_zone"], "effect": "reads free/busy from Google Calendar and returns bookable slots" },
+    { "file": "src/tools.ts", "line": 105, "name": "book_meeting", "params": ["start", "duration_minutes", "guest_name", "guest_email", "topic", "time_zone"], "effect": "creates a Google Calendar event with a Meet link on the owner's calendar; Google emails an invite to guest_email" },
+    { "file": "src/tools.ts", "line": 136, "name": "find_booking", "params": ["booking_code", "guest_email", "time_zone"], "effect": "looks up an agent-made booking by code, only if the email matches" },
+    { "file": "src/tools.ts", "line": 152, "name": "reschedule_booking", "params": ["booking_code", "guest_email", "new_start", "time_zone"], "effect": "moves the event; Google emails the guest the update" },
+    { "file": "src/tools.ts", "line": 173, "name": "cancel_booking", "params": ["booking_code", "guest_email", "time_zone"], "effect": "deletes the event; Google emails the guest the cancellation" }
+  ],
+  "functions": []
+}

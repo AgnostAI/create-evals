@@ -25,6 +25,8 @@ export interface EmitResult {
   removed: string[];
   addedDeps: string[];
   addedTestScript: boolean;
+  /** Added a separate `test:evals` script because `test` runs a different runner. */
+  addedEvalScript: boolean;
 }
 
 export function emit(model: AgentModel, specs: EvalSpec[], opts: EmitOptions = {}): EmitResult {
@@ -82,8 +84,8 @@ export function emit(model: AgentModel, specs: EvalSpec[], opts: EmitOptions = {
     ) + "\n",
   );
 
-  const { addedDeps, addedTestScript } = patchPackageJson(model, runner, usesJudge);
-  return { dir: rel, runner, files, kept, removed, addedDeps, addedTestScript };
+  const { addedDeps, addedTestScript, addedEvalScript } = patchPackageJson(model, runner, usesJudge);
+  return { dir: rel, runner, files, kept, removed, addedDeps, addedTestScript, addedEvalScript };
 }
 
 function patchPackageJson(model: AgentModel, runner: TestRunner, usesJudge: boolean) {
@@ -101,16 +103,21 @@ function patchPackageJson(model: AgentModel, runner: TestRunner, usesJudge: bool
 
   let addedTestScript = false;
   pkg.scripts = { ...pkg.scripts };
+  let addedEvalScript = false;
   if (!pkg.scripts.test || /no test specified/.test(pkg.scripts.test)) {
     pkg.scripts.test = runner === "vitest" ? "vitest run" : "jest";
     addedTestScript = true;
+  } else if (!pkg.scripts.test.includes(runner) && !pkg.scripts["test:evals"]) {
+    // Their test command uses something else (node --test, mocha…), so give the evals their own.
+    pkg.scripts["test:evals"] = runner === "vitest" ? "vitest run evals" : "jest evals";
+    addedEvalScript = true;
   }
 
-  if (needed.length || addedTestScript) {
+  if (needed.length || addedTestScript || addedEvalScript) {
     const indent = /^(\s+)"/m.exec(raw)?.[1] ?? "  ";
     writeFileSync(file, JSON.stringify(pkg, null, indent) + "\n");
   }
-  return { addedDeps: needed, addedTestScript };
+  return { addedDeps: needed, addedTestScript, addedEvalScript };
 }
 
 /** Write just the harness (and judge) so the host agent can add wrappers before writing specs. */

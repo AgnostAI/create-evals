@@ -278,6 +278,8 @@ export interface EvalCase {
 }
 
 export interface EvalSpec {
+  /** "examples": built from developer-picked examples (no risk/control split). */
+  kind?: "examples";
   questionId: string;
   /** For llm-function agents: which exported function this eval calls. */
   agent?: string;

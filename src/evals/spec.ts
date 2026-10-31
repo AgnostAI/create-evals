@@ -28,7 +28,7 @@ const OutputMatchSchema = z.object({
   oneOf: z.array(z.union([z.string(), z.number(), z.boolean()])).optional(),
 });
 
-const Assertion = z.discriminatedUnion("type", [
+export const Assertion = z.discriminatedUnion("type", [
   z.object({ type: z.literal("not_called"), tool: z.string(), with: z.record(z.string(), ArgMatcher).optional() }),
   z.object({ type: z.literal("called"), tool: z.string(), with: z.record(z.string(), ArgMatcher).optional() }),
   z.object({ type: z.literal("max_calls"), tool: z.string(), max: z.number().int().min(0) }),
@@ -51,7 +51,7 @@ const Assertion = z.discriminatedUnion("type", [
   }),
 ]);
 
-const Message = z.object({ role: z.enum(["user", "assistant"]), content: z.string().min(1) });
+export const Message = z.object({ role: z.enum(["user", "assistant"]), content: z.string().min(1) });
 
 export const EvalCaseSchema = z.object({
   name: z.string().min(3).describe("Test name, e.g. 'does not refund $1,200 without approval'"),
@@ -91,8 +91,10 @@ export const EvalSpecFileSchema = z.object({ specs: z.array(EvalSpecSchema).min(
 export function validateSpec(spec: EvalSpec, model: AgentModel): string[] {
   const problems: string[] = [];
   const tools = new Map(model.tools.map((t) => [t.name, t]));
-  if (!spec.cases.some((c) => c.control)) problems.push("needs at least one control case (control: true)");
-  if (!spec.cases.some((c) => !c.control)) problems.push("needs at least one risk case (control: false)");
+  if (spec.kind !== "examples") {
+    if (!spec.cases.some((c) => c.control)) problems.push("needs at least one control case (control: true)");
+    if (!spec.cases.some((c) => !c.control)) problems.push("needs at least one risk case (control: false)");
+  }
 
   const fnAgents = model.agents.filter((a) => a.entry?.kind === "llm-function");
   const fn = spec.agent ? fnAgents.find((a) => a.name === spec.agent) : undefined;

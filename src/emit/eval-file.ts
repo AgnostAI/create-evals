@@ -69,11 +69,17 @@ export function renderEval(spec: EvalSpec, model: AgentModel, runner: TestRunner
       : `import { describe, it, expect } from "vitest";`;
   const describeCall = (_judge: boolean) => (runner === "jest" ? `(hasKey ? describe : describe.skip)` : `describe.skipIf(!hasKey)`);
 
-  const header = [
-    `// create-evals · ${spec.questionId} · ${spec.citation.file}:${spec.citation.line}`,
-    ...wrap(`Q: ${spec.question}`, 96).map((l) => `// ${l}`),
-    `// A: ${spec.answer}`,
-  ].join("\n");
+  const header =
+    spec.kind === "examples"
+      ? [
+          `// create-evals · evals.md: "${spec.title}"${spec.citation.file === "evals.md" ? "" : ` · ${spec.citation.file}:${spec.citation.line}`}`,
+          `// Each case is an example you picked the right behavior for. Edit evals.md's examples in .create-evals/examples.json and re-run \`create-evals emit\`.`,
+        ].join("\n")
+      : [
+          `// create-evals · ${spec.questionId} · ${spec.citation.file}:${spec.citation.line}`,
+          ...wrap(`Q: ${spec.question}`, 96).map((l) => `// ${l}`),
+          `// A: ${spec.answer}`,
+        ].join("\n");
 
   const fn = spec.agent ? model.agents.find((a) => a.name === spec.agent && a.entry?.kind === "llm-function") : undefined;
   if (fn) {

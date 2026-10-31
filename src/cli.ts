@@ -19,6 +19,8 @@ import { validateQuestions } from "./questions/validate.js";
 import { AGNOST_LINE, renderCard } from "./report/card.js";
 import { RULE_LABELS } from "./risk/rules.js";
 import { ScanError } from "./scan/index.js";
+import { EXAMPLES_PATH, ExamplesFileSchema, isExamplesFile, matchOptions, renderEvalsMd, toSpec, validateExamples, type Example, type ProbeRun } from "./examples/index.js";
+import { ProbeError, runProbe } from "./examples/probe.js";
 
 const VERSION = "0.1.0";
 const FRAMEWORK_NAMES = {
@@ -30,13 +32,17 @@ const FRAMEWORK_NAMES = {
   custom: "Custom agent",
 } as const;
 
-const HELP = `${pc.bold("create-evals")} — reads your agent's code, asks 10 yes/no questions, writes 10 runnable evals.
+const HELP = `${pc.bold("create-evals")} — reads your agent's code, runs it on examples of the decisions it makes, and turns the behavior you pick into runnable evals.
 
 ${pc.bold("Usage")}
   npx create-evals [dir]              interactive: scan → 10 questions → 10 evals
   npx create-evals scan [dir] --json  findings + draft questions (no API key needed)
-  npx create-evals check [file]       validate the agent map or questions (default .create-evals/questions.json)
-  npx create-evals emit [file]        validate eval specs and write tests (default .create-evals/specs.json)
+  npx create-evals check [file]       validate the agent map, examples, or questions
+  npx create-evals probe [file] [--only e01,e02]
+                                      run your agent once on each example and show what it did
+                                      (default .create-evals/examples.json)
+  npx create-evals emit [file]        write tests (and evals/evals.md) from picked examples or eval specs
+                                      (default .create-evals/examples.json, else specs.json)
   npx create-evals harness            write evals/harness.ts now (to wire it before writing specs)
   npx create-evals verify             typecheck the evals, check the harness is wired and the test runner picks them up
   npx create-evals try [--runs N] [--verbose]
@@ -63,6 +69,7 @@ interface Flags {
   force?: boolean;
   agents?: boolean;
   verbose?: boolean;
+  only?: string;
   help?: boolean;
   version?: boolean;
 }
@@ -78,7 +85,7 @@ function parseArgs(argv: string[]): Flags {
     else if (a === "--verbose") flags.verbose = true;
     else if (a === "--help" || a === "-h") flags.help = true;
     else if (a === "--version" || a === "-v") flags.version = true;
-    else if (a === "--model" || a === "--answers" || a === "--out" || a === "--runs") flags[a.slice(2) as "model" | "answers" | "out" | "runs"] = argv[++i];
+    else if (a === "--model" || a === "--answers" || a === "--out" || a === "--runs" || a === "--only") flags[a.slice(2) as "model" | "answers" | "out" | "runs" | "only"] = argv[++i];
     else if (a.startsWith("--")) fail(`Unknown option ${a}. See --help.`);
     else flags._.push(a);
   }
@@ -115,8 +122,9 @@ async function main() {
 
   const [cmd, ...rest] = flags._;
   if (cmd === "scan") return cmdScan(path.resolve(rest[0] ?? "."), flags);
-  if (cmd === "check") return cmdCheck(path.resolve("."), rest[0] ?? ".create-evals/questions.json");
-  if (cmd === "emit") return cmdEmit(path.resolve("."), rest[0] ?? ".create-evals/specs.json", flags);
+  if (cmd === "check") return cmdCheck(path.resolve("."), rest[0] ?? (existsSync(EXAMPLES_PATH) ? EXAMPLES_PATH : ".create-evals/questions.json"));
+  if (cmd === "probe") return cmdProbe(path.resolve("."), rest[0] ?? EXAMPLES_PATH, flags);
+  if (cmd === "emit") return cmdEmit(path.resolve("."), rest[0] ?? (existsSync(EXAMPLES_PATH) ? EXAMPLES_PATH : ".create-evals/specs.json"), flags);
   if (cmd === "skill") return cmdSkill(path.resolve(rest[0] ?? "."), flags);
   if (cmd === "verify") return cmdVerify(path.resolve("."), flags);
   if (cmd === "harness") return cmdHarness(path.resolve("."), flags);
@@ -159,6 +167,7 @@ function cmdScan(root: string, flags: Flags) {
 function cmdCheck(root: string, file: string) {
   const data = readJsonFile<Record<string, unknown>>(file);
   if ("entry" in data || "kind" in data) return checkMap(root, file);
+  if (isExamplesFile(data)) return checkExamples(root, file);
   const w = workspace(root);
   const questions = (data.questions ?? []) as (Question & { answer?: string })[];
   const findings: Finding[] = [...w.findings];
@@ -187,7 +196,100 @@ function checkMap(root: string, file: string) {
   console.log(pc.green(`✔ agent map checks out: ${m.tools.length} tools, ${m.functions.length} functions, ${m.prompts.length} prompt lines, all locations verified`));
 }
 
+function loadExamples(root: string, file: string): { w: ReturnType<typeof workspace>; examples: Example[] } {
+  const w = workspace(root);
+  if (w.mapProblems.length) fail(`Fix ${AGENT_MAP_PATH} first:\n${w.mapProblems.map((p) => `  ${p}`).join("\n")}`);
+  const parsed = ExamplesFileSchema.safeParse(readJsonFile(file));
+  if (!parsed.success) fail(`${file} doesn't match the examples format:\n${parsed.error.issues.map((i) => `  ${i.path.join(".")}: ${i.message}`).join("\n")}`);
+  const problems = validateExamples(root, parsed.data.examples, w.model);
+  if (problems.length) {
+    for (const m of problems) console.log(`${pc.red("✖")} ${m}`);
+    process.exit(1);
+  }
+  return { w, examples: parsed.data.examples };
+}
+
+function checkExamples(root: string, file: string) {
+  const { examples } = loadExamples(root, file);
+  const picked = examples.filter((e) => e.expected).length;
+  const rules = new Set(examples.map((e) => e.rule)).size;
+  console.log(pc.green(`✔ ${examples.length} examples across ${rules} rules check out${picked ? ` (${picked} picked)` : ""}`));
+}
+
+/** Run the agent once per example and show which option it chose, so the developer can pick from real behavior. */
+function cmdProbe(root: string, file: string, flags: Flags) {
+  const loaded = loadExamples(root, file);
+  const w = loaded.w;
+  const only = flags.only?.split(",").map((s) => s.trim());
+  const examples = only ? loaded.examples.filter((e) => only.includes(e.id)) : loaded.examples;
+  if (!examples.length) fail(`No examples match --only ${flags.only}`);
+  const required = w.model.requiredEnv ?? [w.model.providerEnv];
+  const missing = required.filter((v) => !process.env[v]);
+  if (missing.length) fail(`Set ${missing.join(", ")} first; probe runs your real agent.`);
+  console.log(`Running your agent on ${examples.length} examples (tools are recorded, not executed)…`);
+  let runs: ProbeRun[];
+  try {
+    runs = runProbe(w.model, examples, (line) => console.log(pc.dim(line)));
+  } catch (e) {
+    if (e instanceof ProbeError || e instanceof HarnessError) fail(e.message);
+    throw e;
+  }
+  const report = examples.map((ex) => {
+    const run = runs.find((r) => r.id === ex.id) ?? { id: ex.id, error: "no result" };
+    const verdicts = matchOptions(ex, run);
+    const did = verdicts.filter((v) => v.result === "pass").map((v) => v.id);
+    const maybe = verdicts.filter((v) => v.result === "judge").map((v) => v.id);
+    return { ex, run, verdicts, did, maybe };
+  });
+  console.log();
+  for (const { ex, run, verdicts, did, maybe } of report) {
+    const src = ex.source ? pc.dim(` · ${ex.source.file}:${ex.source.line}`) : "";
+    console.log(`${pc.bold(ex.id)}  ${ex.rule}${src}`);
+    console.log(`  ${pc.dim(ex.situation)}`);
+    const last = ex.messages?.at(-1)?.content ?? JSON.stringify(ex.args ?? []);
+    console.log(`  ${pc.cyan("input")}  ${clipText(last.replace(/\s+/g, " "), 160)}`);
+    if (run.error) console.log(`  ${pc.red("error")}  ${clipText(run.error, 200)}`);
+    for (const c of run.calls ?? []) console.log(`  ${pc.cyan("tool")}   ${c.tool}(${clipText(JSON.stringify(c.input), 140)})`);
+    if (run.text !== undefined) console.log(`  ${pc.cyan("reply")}  ${clipText((run.text || "[empty]").replace(/\s+/g, " "), 240)}`);
+    if (run.output !== undefined) console.log(`  ${pc.cyan("output")} ${clipText(JSON.stringify(run.output), 240)}`);
+    for (const v of verdicts) {
+      const mark = v.result === "pass" ? pc.green("● did this") : v.result === "judge" ? pc.yellow("? read the reply") : pc.dim("○");
+      console.log(`    (${v.id}) ${v.label}  ${mark}`);
+    }
+    const summary = did.length === 1 ? `matches (${did[0]})` : did.length > 1 ? `matches ${did.map((d) => `(${d})`).join(" and ")}: the options' checks overlap` : maybe.length ? `decide from the reply: ${maybe.map((d) => `(${d})`).join(" or ")}` : "matches none of the options";
+    console.log(`  ${pc.dim(summary)}\n`);
+  }
+  const out = path.join(root, ".create-evals", "probe.json");
+  const fresh = report.map(({ ex, run, verdicts, did, maybe }) => ({ id: ex.id, rule: ex.rule, situation: ex.situation, did, decideFromReply: maybe, verdicts, transcript: run.transcript, error: run.error }));
+  // With --only, keep the other examples' earlier results.
+  const earlier = only && existsSync(out) ? (JSON.parse(readFileSync(out, "utf8")) as (typeof fresh)[number][]).filter((r) => r.rule && !only.includes(r.id)) : [];
+  const order = loaded.examples.map((e) => e.id);
+  const merged = [...earlier, ...fresh].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+  writeFileSync(out, JSON.stringify(merged, null, 2) + "\n");
+  console.log(pc.dim(`Full transcripts: ${path.relative(root, out)}. Show each example to the developer with what the agent did, and record their pick as "expected".`));
+}
+
+function clipText(s: string, n: number) {
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
+function emitExamples(root: string, file: string, flags: Flags) {
+  const { w, examples } = loadExamples(root, file);
+  const unpicked = examples.filter((e) => !e.expected);
+  if (unpicked.length === examples.length) fail(`No example has an "expected" pick yet. Run \`create-evals probe\`, show the developer each one, and record their pick.`);
+  if (unpicked.length) p.log.warn(`Skipping ${unpicked.length} examples with no pick: ${unpicked.map((e) => e.id).join(", ")}`);
+  const specs = toSpec(examples);
+  const result = writeEvals(w.model, specs, flags);
+  writeFileSync(path.join(root, result.dir, "evals.md"), renderEvalsMd(examples, w.model));
+  const tests = result.files.filter((f) => f.endsWith(".eval.test.ts"));
+  console.log();
+  console.log(pc.green(`✔ ${examples.length - unpicked.length} examples → ${tests.length} test files, plus ${result.dir}/evals.md`));
+  for (const f of tests) console.log(`  ${f}`);
+  if (result.addedEvalScript) console.log(`\nRun them with ${pc.cyan(`${w.model.packageManager} run test:evals`)} (needs ${(w.model.requiredEnv ?? [w.model.providerEnv]).join(" + ")}).`);
+}
+
 function cmdEmit(root: string, file: string, flags: Flags) {
+  if (isExamplesFile(readJsonFile(file))) return emitExamples(root, file, flags);
   const w = workspace(root);
   if (w.mapProblems.length) fail(`Fix ${AGENT_MAP_PATH} first:\n${w.mapProblems.map((p) => `  ${p}`).join("\n")}`);
   if (w.scanError && !w.hasMap) {
@@ -267,7 +369,9 @@ function cmdTry(root: string, flags: Flags) {
   if (failed || flaky) {
     console.log(
       pc.dim(
-        "For each failure: a failing control or an over-broad judge is usually a badly written eval (fix the spec and re-emit); a failing risk case is usually a real catch (tell the developer). Flaky never-cases are worth a `repeat`. Add --verbose for each failure's full transcript.",
+        existsSync(path.join(root, EXAMPLES_PATH))
+          ? "For each failure: if the developer picked something the agent didn't do, it's a real catch (tell them); if it matched the pick in `probe` but fails now, it's flaky (add `repeat` to the example); if a check is wrong (an over-broad judge, a guessed argument format), fix the option's `expect` and re-emit. Never change a pick to make a test pass. Add --verbose for each failure's full transcript."
+          : "For each failure: a failing control or an over-broad judge is usually a badly written eval (fix the spec and re-emit); a failing risk case is usually a real catch (tell the developer). Flaky never-cases are worth a `repeat`. Add --verbose for each failure's full transcript.",
       ),
     );
     process.exit(1);
