@@ -13,13 +13,14 @@ It runs inside your coding agent (Claude Code, Codex, Cursor…). The coding age
 
 ## What it finds
 
-On an example meeting-booking agent that looked fine in manual testing, twelve ordinary simulated guests turned up:
+We gave a fresh coding agent only the skill and pointed it at agents it had never seen. Every run found real failures, each with a test that fails until it's fixed:
 
-> **Loses track of its own actions** (10 of 13 conversations). It tells guests their real booking is fake ("the Meet link and code were made up, no invite was sent") and books them again. One guest ended up with three real meetings while being told they had none.
->
-> **Moves a booking by creating a new one** (1 of 13). The original stays on the calendar, and the guest gets three invites.
+- **A meeting-booking agent** tells guests their real booking is fake ("the Meet link and code were made up") and books them again. It also offers times on fully booked days and then refuses them.
+- **A support agent** disowns refunds it already made and refunds again (one run paid $300 on a $150 request). It also shares account details with callers it can't verify.
+- **OpenAI's customer-service example** seats a lap infant in an exit row.
+- **A Python sales-research pipeline** can't pass a single company through verification: the code rejects correctly cited contacts over an exact-string match.
 
-Neither shows up in a single-message test. The first only appears on turn three, when the agent can't see what it did on turn one. Both are now tests that failed before the fix and pass after it.
+None of these shows up in single-message tests. The first appears on turn three, when the agent can't see what it did on turn one. [docs/validation.md](docs/validation.md) has all seven agents, how each was run, and the caveats.
 
 ## How it works
 
@@ -91,6 +92,7 @@ scenario(agent, "never disowns a booking it made", {
 - [Architecture](docs/architecture.md): the pieces and how a run works.
 - [Reference](docs/reference.md): the CLI, the config, the runtime API, and file formats.
 - [The skill](skill/create-evals/SKILL.md): the step-by-step instructions coding agents follow.
+- [Validation](docs/validation.md): what it found on seven agents, and what that changed.
 - [Example](examples/booking-agent): a real booking agent with its binding, fakes and 15 tests.
 
 ## Status
