@@ -1,7 +1,7 @@
 {
   "name": "create-evals",
-  "version": "0.1.0",
-  "description": "Reads your AI agent's code, asks 10 yes/no questions grounded in it, and writes 10 runnable evals into your repo.",
+  "version": "1.0.0-alpha.0",
+  "description": "Find your AI agent's real failures and turn each one into a test. Runs your agent against simulated users, reviews every conversation, and groups what went wrong.",
   "type": "module",
   "bin": {
     "create-evals": "dist/cli.js"
@@ -11,28 +11,25 @@
     "skill"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && tsc -p tsconfig.build.json",
     "dev": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "sync:agents": "node scripts/sync-agents-md.mjs",
-    "prepublishOnly": "npm run typecheck && npm test && npm run build",
-    "demo": "npm run build && node scripts/record-demo.mjs"
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "keywords": [
     "evals",
     "llm",
     "ai-agents",
-    "testing",
-    "vitest",
-    "jest",
-    "ai-sdk",
-    "mastra",
-    "openai-agents"
+    "agent-testing",
+    "simulation",
+    "error-analysis",
+    "claude-code",
+    "codex"
   ],
   "author": "Agnost AI",
   "homepage": "https://github.com/AgnostAI/create-evals",
@@ -42,18 +39,19 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@ai-sdk/anthropic": "^4.0.92",
-    "@clack/prompts": "^1.8.1",
-    "ai": "^7.0.157",
-    "picocolors": "^1.1.1",
-    "ts-morph": "^28.0.0",
-    "zod": "^4.6.7"
+    "tsx": "^4.23.15"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
     "tsup": "^9.0.0",
-    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5"
-  }
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "types": "dist/index.d.ts"
 }

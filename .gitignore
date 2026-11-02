@@ -8,3 +8,6 @@ fixtures/*/evals/
 fixtures/*/.create-evals/
 *.tgz
 examples/*/node_modules/
+.create-evals/
+examples/*/.create-evals/
+*.tgz

@@ -9,7 +9,7 @@
     "auth": "tsx src/auth.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts",
-    "evals": "vitest run"
+    "evals": "create-evals test"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.92",
@@ -18,8 +18,8 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
+    "create-evals": "file:../..",
     "tsx": "^4.23.15",
-    "typescript": "^7.0.2",
-    "vitest": "^5.0.5"
+    "typescript": "^7.0.2"
   }
 }

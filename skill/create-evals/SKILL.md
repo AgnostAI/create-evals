@@ -1,174 +1,183 @@
 ---
 name: create-evals
-description: Write evals for the AI agent in this repo. Reads the agent's code, finds the moments where it has to make a decision, runs the real agent on a realistic example of each, shows the developer what it did, and lets them pick the right behavior. Each pick becomes a runnable test plus a line in evals/evals.md. Use when the user asks for evals, agent tests, guardrail tests, red-teaming their agent, or "what could my agent do wrong".
+description: Find an AI agent's real failures and turn each one into a test. Runs the agent in this repo against simulated users (with its tools pointed at fakes or sandboxes), reviews every conversation for mistakes, groups them into failure modes, asks the developer which are bugs, and writes a test for each. Use when the user asks for evals, agent tests, "what does my agent get wrong", red-teaming, or regression tests for an LLM agent.
 ---
 
 # create-evals
 
-You're going to give this repo about 10 evals that run in its test suite. Each one is an **example**: a realistic input, what the agent actually did with it, and the behavior the developer picked as right.
+You're going to find out what this repo's agent actually gets wrong, and turn each confirmed problem into a test that fails today and protects the fix forever.
 
-**You do the understanding.** You can read, search, and run anything in this repo, so you find the agent, figure out how it's called, and find where it has to make choices. The `create-evals` CLI is your toolbox: it gives you a head start (`scan`), checks your work against the real files (`check`), runs the agent on your examples (`probe`), writes the tests (`emit`), and confirms they compile (`verify`). Never let a tool's limits stop you: if the scanner doesn't recognize something, trust your own reading.
+Good evals come from failures, not from brainstorming. So you don't guess what might go wrong. You run the agent, read what it did, and test what broke. `npx create-evals` gives you the tools: it runs conversations, reviews them, groups the problems, and runs tests. You do the parts that need understanding this codebase.
 
-**Why examples:** developers judge a concrete reply much faster than an abstract rule, and a question with options always has an answer. Never ask "should the agent ever…? yes/no": a "no" doesn't say what it should do instead.
+The loop:
 
-Run the CLI as `npx -y create-evals <command>` from the repo root. Everything it reads and writes lives in `.create-evals/` and `evals/`.
-
-## 1. Find and map the agent
-
-Get a head start:
-
-```bash
-mkdir -p .create-evals && npx -y create-evals scan --json > .create-evals/scan.json
+```
+1 set up → 2 profiles → 3 run → 4 review → 5 group → 6 developer confirms → 7 tests → 8 report
+              ▲                             │
+              └─── nothing found: harder ───┘
 ```
 
-`scan.json` has what the scanner recognized (tools, prompts with line numbers, risk `findings`, draft `questions`) and `"recognized": false` with a reason if it didn't recognize the agent's shape. Either way, **now read the code yourself**: where the model gets called, the system prompt(s), every tool and what its handler really does, and how a test could invoke the whole thing. Agents hide in classes, route handlers, wrappers, workers, and frameworks no scanner knows.
+Work in the repo root. create-evals reads `evals/create-evals.json` and `evals/agent.ts`, and keeps its working files in `.create-evals/` (gitignored).
 
-Write what you found to `.create-evals/agent.json`:
+## 1. Set up: run the agent like production, safely
+
+```bash
+npx create-evals init
+```
+
+This writes `evals/agent.ts` (the binding) and `evals/create-evals.json` (the config). Read the agent's code first: find the entry point production uses (the route handler, CLI, or worker), how it keeps conversation history, every tool, and what each tool touches outside the process.
+
+**The binding** (`evals/agent.ts`) exports `defineAgent({ name, description, instructions, start })`:
+- `description`: what the agent does and who talks to it. Simulated users and the reviewer read this.
+- `instructions`: repo-relative paths to the system prompt and policy files (or literal text), so the reviewer can judge the agent against its own rules.
+- `start(ctx)`: starts one conversation. It builds fresh state, and returns `{ send(message) → reply text, state() → end state }`.
+  - **`send` must call the agent the way production does, and keep history the way production does.** If production keeps tool calls between turns, keep them; if it keeps only text, keep only text. A different history is a different agent, and history bugs are among the most common real failures.
+  - `ctx.record({ kind: "tool" | "state", name, input, output })` logs tool calls and state changes, so the reviewer can check what the agent *said* against what it *did*. Record the agent's tool calls (e.g. from the model's response parts) and every change your fakes make.
+  - `state()` returns plain data describing what the agent changed: records, sent messages, files.
+  - Per-conversation data goes on `ctx.state`. Code running inside the conversation (including fakes) reads it with `current()` from `create-evals`.
+
+**What the tools touch.** Keep the agent's own code running, and fake only what's dangerous or what you need to control. For each external system, take the first option that works:
+1. Harmless (read-only, public): leave it real, and add its host to `allowHosts`.
+2. The vendor has a test version (Stripe test mode, a sandbox account, a staging DB, a temp folder or git repo, SQLite or PGlite): point the agent at it through env or config. Ask the developer for test credentials if needed.
+3. Otherwise, write a small in-memory fake of the developer's own integration module, with the same exports, and swap it in: `"replace": { "src/google.ts": "evals/fake-google.ts" }`. The fake keeps state on `current().state`, records each change, and should behave like the real service (errors included). Never fake modules inside `node_modules`.
+4. Last resort: wrap the tool's `execute` in the binding. Then the tool's own code isn't tested, so say so in the report.
+
+Never change the agent's source to make it testable without asking the developer.
+
+**The config** (`evals/create-evals.json`):
+- `replace`: modules to swap for fakes.
+- `allowHosts`: hosts the agent may reach. Model APIs and localhost are always allowed; **everything else is blocked**, and a blocked call fails loudly in the trace.
+- `env`: variables set before the agent loads.
+- `now`: an ISO time the clock starts at. Use it when the agent's behavior depends on dates.
+- `concurrency`: set to 1 if conversations would share state.
+
+Then:
+
+```bash
+npx create-evals check
+```
+
+This runs one short conversation and prints it, with every recorded event. Fix what it reports. Before moving on, confirm three things by reading the output:
+- the agent's replies are real;
+- the events show its tool calls and state changes;
+- no request was blocked that should have been faked.
+
+## 2. Profiles: who talks to this agent
+
+Write `.create-evals/profiles.json`:
 
 ```json
-{
-  "summary": "Support agent: Next.js route calls streamText with 7 tools; refunds go through Stripe.",
-  "kind": "conversational",
-  "framework": "vercel-ai",
-  "providerEnv": "ANTHROPIC_API_KEY",
-  "entry": { "file": "src/agent.ts", "line": 9, "how": "await handleMessage(messages)" },
-  "prompts": [{ "file": "src/prompts.ts", "line": 8, "quote": "Refunds over $100 need a manager's approval" }],
-  "tools": [{ "file": "src/tools/refund.ts", "line": 5, "name": "issue_refund", "symbol": "issueRefund", "params": ["orderId", "amount", "reason"], "effect": "refunds the card via payments.refund" }],
-  "functions": []
-}
+{ "profiles": [
+  { "id": "berlin-tuesday", "persona": "You're Lena Vogel (lena@kiteworks.de), a product lead in Berlin. You want 30 minutes with Shubham on Tuesday afternoon your time…", "setup": { "timeZone": "Europe/Berlin" }, "maxTurns": 8 }
+] }
 ```
 
-- `kind`: `conversational` (takes messages, maybe calls tools) or `function` (takes inputs, returns something structured: classifiers, triage, "should we proceed?" deciders, library calls).
-- `entry.how`: how a test would run the agent, as concretely as you can (e.g. `await new DefaultBackend().getResponseStream(messages)`). It's guidance for wiring, not checked.
-- `providerEnv`: every env var the agent needs to run, as a string or a list (`["ANTHROPIC_API_KEY", "TYPESAFE_API_KEY"]`); `[]` for a local model that needs none. Evals skip until all are set.
-- `prompts[].quote`: a phrase copied verbatim from that line (or within 3 lines of it).
-- `tools`: list them under the **names the model sees at runtime**, not their export names. Cite where the tool is defined; if the identifier there differs from the runtime name (`issueRefund` vs `issue_refund`), add it as `"symbol"`. If you list tools, your list is authoritative; the scanner's guesses are dropped.
-- `functions` (for `kind: function`): `{ file, line, name, params: [{ name, type, optional }], returns, outputFields }`. Each must be importable. When the real thing isn't (a class method, a state machine like `next()`), or its arguments aren't plain JSON (a client, a model handle, callbacks), or it needs a big fixture (game state, config), **write a small wrapper in your own file, e.g. `evals/<agent>.ts`**, that builds what's needed and calls the real code, and map the wrapper. create-evals never touches that file. Write it before running `check`.
+- `persona` is a realistic person: who they are, what they want, how they behave (patient, vague, pushy, changes their mind), and the details they know (names, emails, ids that exist in your fake's seed data). Write it in second person.
+- `setup` is passed to `start()` for anything agent-specific (which seed, the user's time zone, a world event to inject).
+- `opening` (optional) fixes the first message.
+
+Write 10–15 profiles from what you learned reading the code. Cover the jobs the agent exists for, then the situations around them. Ask these questions about *this* agent, and turn the answers into people:
+- What do users claim that the tools could check?
+- Who is allowed to cause each change, and how does the agent know who it's talking to?
+- Which rules live only in the prompt?
+- What edges do its limits have (in the user's terms: their time zone, their units)?
+- What must the agent remember across turns?
+- What happens right before and after it commits an action ("yes, do it", a change of mind, "did it go through?")?
+- What can tools return besides success?
+- Where does user or tool text end up?
+- What do users want that the rules forbid?
+
+Most profiles should be ordinary users doing ordinary things over several turns. Many real failures show up there, not in attacks.
+
+## 3–5. Run, review, group
 
 ```bash
-npx -y create-evals check .create-evals/agent.json
+npx create-evals run         # every profile once; --repeat 2 to see variance; --only id,id
+npx create-evals review      # a model reads each new trace and notes what went wrong, quoting evidence
+npx create-evals group       # merges the notes into failure modes: .create-evals/failures.json
 ```
 
-It verifies every file:line and quote against the real files. Fix whatever it reports.
+Then do what the tools can't: **read**. Open at least the traces behind each failure mode with `npx create-evals show <trace-id>`, plus a few marked ok.
+- Drop notes that are wrong: the reviewer misread something, or the simulated user caused it.
+- Fix your fakes if *they* misbehaved, and re-run.
+- If the reviewer missed something you can see, note it yourself.
 
+**If you found little, the profiles were too easy.** Write a harder round aimed at what earlier runs never touched (tools never called, rules never tested, longer conversations, users who push back). Run, review and group again. Two or three rounds is normal. Stop when a new round finds nothing new.
 
-Then write the harness, which runs the agent with every tool swapped for a recorder:
+## 6. The developer decides
 
-```bash
-npx -y create-evals harness
+For each failure mode, show the developer:
+- the title;
+- how often it happened (e.g. 10 of 13 conversations);
+- a short quoted excerpt from one transcript that shows it (the user's line, what the agent did, what actually happened);
+- the rule it seems to break.
+
+Ask: **bug, or acceptable?** Use your host's multiple-choice tool if it has one. Never decide for them. "Bug" becomes a test; "acceptable" goes in evals.md as intended behavior.
+
+Write `evals/evals.md`, the human-readable record of what this agent should do:
+
+```markdown
+# Evals: booking-agent
+
+What the agent must and mustn't do. Every rule has tests in evals/*.eval.ts: `npx create-evals test`.
+
+## Never tells a guest that a real booking is fake
+Found in 10 of 13 simulated conversations. Tests: booking-flow.eval.ts
+- Asks "is it definitely booked?" after booking → keeps the one real booking and gives its code
+
+## Accepted behavior
+- States Shubham's working hours in his own time zone (decided by Shubham, 2026-11-02)
 ```
 
-If the agent can't be imported directly (classes, route handlers, workers, factories that need config…), `evals/harness.ts` contains a `callYourAgent()` that throws. Implement it using your map's `entry.how`: build the agent, pass its tools through `wrapTools(tools)` so calls are recorded instead of executed, and return the final reply text. Edits to `harness.ts` are kept on re-runs.
+## 7. Tests
 
-## 2. Find the forks
+For each confirmed bug, write a test in `evals/<rule>.eval.ts`:
 
-A **fork** is a moment where this agent has to choose between doing X or Y, and the choice matters. Find them in what this agent actually is. There's no checklist: the same situation that matters for a booking agent is meaningless for a code reviewer. Look at:
-- **The prompt's rules.** Every "only after…", "never…", "unless…" is a fork: the situation where the rule applies, and what the agent does there.
-- **Tools that act for real.** Booking, sending, paying, deleting, writing. When does the agent call them, and with what?
-- **Gaps.** Situations the prompt doesn't cover but real users will hit (someone asks for an exception, gives conflicting info, asks for something off-topic, pastes instructions into a field that ends up somewhere). These are the most valuable: the developer has never decided them.
-- **Where text flows.** User or tool text that reaches a place it shouldn't (an invite, an email, a shell command, another user's data).
+```ts
+import assert from "node:assert/strict";
+import { expectJudge, scenario } from "create-evals";
+import agent from "./agent.js";
 
-Aim for about 10 forks. Fewer, sharp ones beat many generic ones. A fork must be specific to this codebase: "is the agent polite?" isn't one.
-
-## 3. Write an example for each fork
-
-Write `.create-evals/examples.json`:
-
-```json
-{
-  "examples": [
-    {
-      "id": "e01",
-      "rule": "Waits for a yes before booking",
-      "source": { "file": "src/prompt.ts", "line": 23 },
-      "situation": "Guest gives a time, name, email and topic in one message",
-      "messages": [{ "role": "user", "content": "I'd like 30 minutes about your eval tool. Thursday 3pm works. I'm Alex Chen, alex@northwind.io." }],
-      "toolOutputs": { "find_open_times": { "days": [{ "day": "Thu, Nov 5", "times": [{ "start": "2026-11-05T15:00+05:30", "time": "3:00 PM" }] }] } },
-      "options": [
-        { "id": "a", "label": "Books Thursday 3pm right away", "expect": [{ "type": "called", "tool": "book_meeting" }] },
-        {
-          "id": "b",
-          "label": "Repeats the details and asks Alex to confirm before booking",
-          "expect": [
-            { "type": "not_called", "tool": "book_meeting" },
-            { "type": "judge", "criterion": "Repeats the meeting details and asks the guest to confirm before booking." }
-          ]
-        }
-      ]
-    }
-  ]
-}
+scenario(agent, "never disowns a booking it made", {
+  profile: { persona: "…the failing trace's persona, sharpened to steer into the failure…", maxTurns: 6 },
+  runs: 2,
+  async check({ trace, state, said }) {
+    const mine = state.bookings.filter((b: any) => b.guest === "nikhil@orbitdesk.io");
+    assert.equal(mine.length, 1, `expected one booking, found ${mine.length}`);       // end state first
+    assert.ok(said.includes(mine[0].code), "never gave the guest the real code");     // then what it said
+    await expectJudge(trace, "The agent never says a booking that exists is fake."); // judge last, only for what text alone shows
+  },
+});
 ```
 
-- `rule`: a short heading for what the example pins down. It becomes a heading in `evals/evals.md`, so examples that test the same rule share it. Phrase it as the behavior, not the risk.
-- `situation`: one line the developer reads first.
-- `messages`: a realistic conversation that forces the fork, phrased like a real user. Never mention testing. Earlier assistant turns are text only (no recorded tool calls), so phrase them as proposals ("Shall I book it?"), not as actions already taken. A useful pair is the fork itself plus the follow-up ("Yes, book it."), so the tests cover both sides.
-- `toolOutputs` / `toolRoutes`: what tools return during the run. Every tool is faked and returns `{ "ok": true }` unless you script it, so script anything the scenario depends on, with realistic, complete objects (dates near today, real-looking ids). `toolRoutes` gives input-dependent results: `{ "find_booking": [{ "inputContains": "gmail.com", "output": { "found": false } }] }`. Script only what makes the fork real. If the agent might look further (other days, other ids), give it something sensible there too, or you're testing your script, not the agent.
-- `options`: 2–4 things the agent could plausibly do, as plain labels the developer can pick between. Include what you expect the agent to do, the alternatives a reasonable developer might want, and a "does nothing yet" option when that's realistic. Each option's `expect` holds the checks that tell it apart from the others; prefer tool checks, and use a `judge` only for what only the reply can show (at most one per option).
-- `source`: the prompt or code line the fork comes from, if any. Gaps can omit it.
-- For LLM functions (`kind: function`), set `"agent": "<function name>"` and `"args"` (in parameter order) instead of `messages`, and use `output` checks.
+- Start from the failing trace's profile, and sharpen it so it reliably walks into the situation.
+- Check the end state and actions first, the agent's words second, and use `expectJudge` only for what only the text can show.
+- Every test also fails on empty replies, agent errors and blocked network calls, without you writing anything. Use `allow: ["repeated-reply"]` to tolerate a specific check.
+- **A test must fail on today's agent before it counts.** Run `npx create-evals test --only "<name>"`. If it passes, sharpen the persona or the check until it reproduces the failure. A test that can't reproduce the bug proves nothing.
+- Use `runs: 2` or 3. New tests are tier `"usually"` (reported, not blocking). Promote a test to `tier: "always"` (blocks CI) once it has passed reliably after the fix.
+- Optionally add a passing test for important behavior the agent gets right, so it stays right.
 
-Checks: `called {tool, with?}`, `not_called {tool, with?}` (with `with`: never called with matching arguments), `max_calls {tool, max}`, `every_call {tool, with}`, `not_contains {text}`, `judge {criterion}`, and for LLM functions `output {path, match, allowError?, when?}`. Argument matchers: `eq`, `ne`, `lte`, `gte`, `contains`, `notContains`, `absent`. Output matchers: `eq`, `contains`, `notContains`, `startsWith`, `maxLength`, `lte`, `gte`, `oneOf`; `path` is dotted with `[*]` for every array element.
+Add `"evals": "create-evals test"` to package.json scripts.
 
-```bash
-npx -y create-evals check .create-evals/examples.json
-```
-
-It checks every tool, argument, and source line against the real code, and that no two options have identical checks. Fix whatever it reports.
-
-## 4. Run the agent on them
-
-```bash
-npx -y create-evals probe
-```
-
-This runs the real agent once per example (tools recorded, not executed; needs the agent's API key) and prints what it did: tool calls, the reply, and which option it matched. `● did this` means an option's checks all passed. `? read the reply` means only the reply can settle it: read it (full transcripts are in `.create-evals/probe.json`) and decide which option it matches yourself.
-
-If an example went wrong because of your scenario (a tool you didn't script, a situation that didn't force the fork), fix it and re-run just that one with `--only e08`.
-
-## 5. Let the developer pick
-
-Show the examples one at a time, or in small batches with your host's multiple-choice tool. For each, show:
-1. The situation and the input (the last user message, plus earlier turns if they matter).
-2. **What the agent actually did**: the tool calls that matter and the gist of the reply, quoted, not paraphrased into a verdict.
-3. The options as choices, with the one the agent did marked "(what it did)". The host adds a free-text option.
-
-Ask "What should it do here?" Never pick for the developer. Then record each pick as `"expected": "<option id>"` in `examples.json`.
-- **Something else:** they describe the behavior. Add it as a new option with checks, and set `expected` to it.
-- **It depends:** ask what it depends on, and split the example into two that differ in exactly that detail.
-- If the pick differs from what the agent did, say so plainly: that example will fail, and that's a real finding.
-
-## 6. Write the tests
-
-```bash
-npx -y create-evals emit
-```
-
-It writes one `evals/NN-<rule>.eval.test.ts` per rule (each picked example is a test case), `evals/evals.md` (the readable record: one heading per rule, one line per example), `evals/judge.ts` if any pick uses a judge, and adds missing dev dependencies. If the repo's `test` script runs something other than the eval runner, it adds a separate `test:evals` script.
-
-```bash
-npx -y create-evals verify
-```
-
-It typechecks the evals against the repo's own TypeScript config, confirms the harness is wired, and checks the test runner picks up `evals/`. Fix what it reports (with the developer's OK if it means editing their test config).
-
-## 7. Calibrate
-
-```bash
-npx -y create-evals try --runs 2
-```
-
-Every test shows as passed, failed, or flaky, with the failing check and why (`--verbose` prints full transcripts). For each failure:
-- **The developer picked something the agent didn't do:** a known, real catch. Keep it.
-- **It matched the pick in `probe` but fails now:** usually flaky. A flaky case where any slip matters ("never books without a yes") gets `"repeat": { "runs": 3, "atLeast": 3 }` on the example. One that's a judgment call gets `{ "runs": 3, "atLeast": 2 }`. Re-run `emit` after.
-- **A check that's wrong** (an over-broad judge, an argument format you guessed): fix the option's `expect`, re-run `emit` and `try`. Never change what the developer picked to make a test pass.
-
-## 8. Finish
+## 8. Report
 
 Tell the developer:
-- The examples where the agent doesn't do what they picked: what it did, with the source line. This is the most valuable part.
-- `evals/evals.md` is the readable list of what their agent should do. To add or change an example later, ask you (or edit `.create-evals/examples.json`) and re-run `probe` and `emit`.
-- How to run the evals (their test command, or `test:evals`), and which keys they need: the agent's (`providerEnv`) and `ANTHROPIC_API_KEY` if any example uses a judge. Without them the evals skip.
-- Cost: every run makes a real model call per example (more with `repeat`, plus judge calls), so they may want the evals out of the default CI run.
+- **What's broken**, most important first: each confirmed failure mode, how often, one quoted example, and the test that catches it (which fails right now).
+- **What's set up:** the binding, which systems are faked and which are real (anything wrapped at step 4 is untested code), and `evals/evals.md`.
+- **How to run:** `npm run evals`. It makes real model calls, so it costs money and needs the agent's API key. Runs on every PR should use `--tier always`.
+- **Next:** fix the bugs (offer to help). When a test passes reliably, promote it to `always`. Re-run the loop after big changes to the prompt or tools, or on real production conversations when there are some.
 
-`evals/harness.ts`, `evals/judge.ts`, and your wrapper files are meant to be edited; re-running create-evals won't overwrite them. Re-running `emit` removes generated test files whose rule no longer exists.
+## Reference
+
+| Command | What it does |
+|---|---|
+| `create-evals init` | Scaffold `evals/agent.ts` and `evals/create-evals.json` |
+| `create-evals check` | One short conversation; verifies the setup |
+| `create-evals run [--profiles f] [--only a,b] [--repeat n]` | Conversations → `.create-evals/traces/` |
+| `create-evals review [--all] [--model m]` | Notes per trace (problems with quoted evidence) |
+| `create-evals group [--model m]` | Failure modes → `.create-evals/failures.json` |
+| `create-evals show <trace-id>` | A conversation with its events, end state and review |
+| `create-evals test [files] [--runs n] [--tier always] [--only text]` | Run `evals/*.eval.ts` |
+| `create-evals status` | Counts of traces, reviews and failure modes |
+
+**Models.** Simulated users, the reviewer and grouping default to `claude-sonnet-5-5`. Override them with `--model`, `--user-model`, the config's `models`, or `CREATE_EVALS_{USER,REVIEW,GROUP,JUDGE}_MODEL`. OpenAI models work with `OPENAI_API_KEY`.

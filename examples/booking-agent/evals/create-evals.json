@@ -1,0 +1,5 @@
+{
+  "agent": "evals/agent.ts",
+  "now": "2026-11-02T09:00:00+05:30",
+  "env": { "OWNER_NAME": "Shubham", "OWNER_TIMEZONE": "Asia/Kolkata", "GOOGLE_CLIENT_ID": "unused", "GOOGLE_CLIENT_SECRET": "unused", "GOOGLE_REFRESH_TOKEN": "unused" }
+}
