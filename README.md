@@ -35,31 +35,31 @@ None of these shows up in single-message tests. The first appears on turn three,
 
 ## Get started
 
-In your agent's repo, ask your coding agent:
-
-> Set up create-evals for the agent in this repo (`npx create-evals`, see its skill), find what it gets wrong, and write tests.
-
-Install the skill so it knows how:
+In your agent's repo (TypeScript, Python, anything):
 
 ```bash
-npm i -D create-evals
-mkdir -p .claude/skills && cp -r node_modules/create-evals/skill/create-evals .claude/skills/   # Claude Code
-cat node_modules/create-evals/skill/AGENTS.md >> AGENTS.md                                  # Codex, Cursor, others
+npx create-evals
 ```
 
-Or drive it yourself:
+Then open your coding agent there (Claude Code, Codex, Cursor) and run:
+
+```
+/create-evals
+```
+
+Then:
+- It reads your agent, runs it against simulated users, and reads every conversation.
+- It shows you what went wrong, with real excerpts, and asks which ones are bugs.
+- It writes a test for each bug.
+
+Afterwards, you run:
 
 ```bash
-npx create-evals init      # evals/agent.ts (how to run your agent) + evals/create-evals.json
-npx create-evals check     # one short conversation to prove the setup works
-# write .create-evals/profiles.json (who talks to your agent)
-npx create-evals run
-npx create-evals review
-npx create-evals group     # → .create-evals/failures.json
-npx create-evals test      # runs evals/*.eval.ts
+npx create-evals find    # run, review, and list what went wrong (again, after changes)
+npx create-evals test    # run the tests (use --tier always in CI)
 ```
 
-It needs Node 22+ and `ANTHROPIC_API_KEY`, used for the simulated users and the reviewer (or `OPENAI_API_KEY` with `--model gpt-…`).
+Nothing to install, no config to write. It needs Node 22+ and `ANTHROPIC_API_KEY`, used for the simulated users and the reviewer. `OPENAI_API_KEY` works too, with `--model gpt-…`.
 
 ## What ends up in your repo
 

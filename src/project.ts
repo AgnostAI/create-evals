@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
+import * as nodeModule from "node:module";
 import { register } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -53,6 +54,7 @@ export async function prepare(root: string, config: Config) {
 
   const { register: registerTsx } = await import("tsx/esm/api");
   registerTsx();
+  resolveSelf();
   const map: Record<string, string> = {};
   for (const [real, fake] of Object.entries(config.replace ?? {})) {
     for (const p of [real, fake]) if (!existsSync(path.join(root, p))) throw new Error(`${CONFIG_PATH}: "replace" points at ${p}, which doesn't exist.`);
@@ -70,11 +72,34 @@ export async function prepare(root: string, config: Config) {
   }
 }
 
+/**
+ * Zero install: if the repo doesn't have create-evals installed (a Python repo, or just `npx create-evals`),
+ * `import … from "create-evals"` in evals/*.ts resolves to this copy. Works for import and require.
+ */
+function resolveSelf() {
+  const here = new URL(".", import.meta.url);
+  const self = ["index.js", "index.ts"].map((f) => new URL(f, here)).find((u) => existsSync(u))!.href;
+  const registerHooks = (nodeModule as any).registerHooks as undefined | ((hooks: object) => void);
+  if (!registerHooks) return;
+  registerHooks({
+    resolve(specifier: string, context: unknown, next: (s: string, c: unknown) => { url: string }) {
+      try {
+        return next(specifier, context);
+      } catch (e) {
+        if (specifier === "create-evals") return { url: self, format: "module", shortCircuit: true };
+        throw e;
+      }
+    },
+  });
+}
+
 export async function loadAgent(root: string, config: Config): Promise<AgentDefinition> {
   const file = path.join(root, config.agent ?? "evals/agent.ts");
   if (!existsSync(file)) throw new Error(`No ${path.relative(root, file)} yet. Run \`create-evals init\` and fill it in (see the skill).`);
   const mod = await import(pathToFileURL(file).href);
-  const agent = (mod.default ?? mod.agent) as AgentDefinition | undefined;
+  // Without "type": "module", tsx compiles the binding as CommonJS and the default export sits one level deeper.
+  let agent = (mod.default ?? mod.agent) as any;
+  if (agent && !agent.start && agent.default?.start) agent = agent.default;
   if (!agent?.start) throw new Error(`${path.relative(root, file)} must \`export default defineAgent({ ... })\`.`);
   return agent;
 }

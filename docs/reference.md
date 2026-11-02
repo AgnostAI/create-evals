@@ -2,10 +2,12 @@
 
 ## CLI
 
-Run from the agent's repo root. Every command that runs the agent sets up the sandbox first (see [config](#config)). Every command takes `--config <file>` to use a different config, e.g. an eval-only overlay.
+Run from the agent's repo root, as `npx create-evals <command>`. Nothing needs installing: `import … from "create-evals"` in `evals/*.ts` resolves to the copy npx runs, even in a repo without a package.json. Every command that runs the agent sets up the sandbox first (see [config](#config)). Every command takes `--config <file>` to use a different config, e.g. an eval-only overlay.
 
 | Command | Does |
 |---|---|
+| `create-evals` (no arguments) | Installs the skill: `.claude/skills/create-evals/SKILL.md` (Claude Code) and a section in `AGENTS.md` (Codex, Cursor, others), then says what to do next. |
+| `create-evals find` | `run`, then `review`, then `group`: from profiles to "here's what's broken". |
 | `create-evals init [--function]` | Writes `evals/agent.ts` (a chat binding, or a one-input function binding with `--function`) and `evals/create-evals.json`, and gitignores `.create-evals/`. Existing files are kept. |
 | `create-evals check [--message m]` | Runs one short conversation (2 turns, or exactly one message with `--message`) and prints it with every event. Fails on agent errors, empty replies and blocked requests. Warns when no events or end state were recorded. |
 | `create-evals run [--profiles file] [--only a,b] [--repeat n] [--concurrency n] [--user-model m]` | Runs simulated users from `.create-evals/profiles.json` and saves each trace to `.create-evals/traces/`. |

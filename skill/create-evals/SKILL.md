@@ -17,12 +17,12 @@ The loop:
               └─── nothing found: harder ───┘
 ```
 
-Work in the repo root. create-evals reads `evals/create-evals.json` and `evals/agent.ts`, and keeps its working files in `.create-evals/` (gitignored).
+Work in the repo root. Run the CLI as `npx -y create-evals <command>`: nothing needs installing, not even in a Python repo (`import … from "create-evals"` in `evals/*.ts` resolves to the copy npx runs). create-evals reads `evals/create-evals.json` and `evals/agent.ts`, and keeps its working files in `.create-evals/` (gitignored).
 
 ## 1. Set up: run the agent like production, safely
 
 ```bash
-npx create-evals init
+npx -y create-evals init
 ```
 
 This writes `evals/agent.ts` (the binding) and `evals/create-evals.json` (the config). Install dependencies with the repo's own package manager (pnpm, yarn or npm, whichever lockfile it has), so you run the versions production runs. Read the agent's code first: find the entry point production uses (the route handler, CLI, or worker), how it keeps conversation history, every tool, and what each tool touches outside the process.
@@ -42,7 +42,7 @@ This writes `evals/agent.ts` (the binding) and `evals/create-evals.json` (the co
 3. Otherwise, write a small in-memory fake of the developer's own integration module, with the same exports, and swap it in: `"replace": { "src/google.ts": "evals/fake-google.ts" }`. The fake keeps state on `current().state`, records each change, and should behave like the real service (errors included). Never fake modules inside `node_modules`.
 4. Last resort: wrap the tool's `execute` in the binding. Then the tool's own code isn't tested, so say so in the report.
 
-Never change the agent's source to make it testable without asking the developer. If a bug blocks everything after it (a crash on every turn), you can apply the one-line fix in an eval-only overlay config (`npx create-evals run --config evals/overlay.json`, with `replace` pointing at a patched copy) to explore further, and report the fix as finding #1.
+Never change the agent's source to make it testable without asking the developer. If a bug blocks everything after it (a crash on every turn), you can apply the one-line fix in an eval-only overlay config (`npx -y create-evals run --config evals/overlay.json`, with `replace` pointing at a patched copy) to explore further, and report the fix as finding #1.
 
 **The config** (`evals/create-evals.json`):
 - `replace`: modules to swap for fakes.
@@ -51,7 +51,7 @@ Never change the agent's source to make it testable without asking the developer
 - `now`: an ISO time the clock starts at. Use it when the agent's behavior depends on dates.
 - `concurrency`: set to 1 if conversations would share state.
 
-**Agents that aren't chats** (classifiers, triage, extractors, pipelines: one input → one output) use the same loop. Run `npx create-evals init --function`, and set `kind: "function"` plus an `example` input in the binding. Profiles are `{ "id": "...", "input": { ...any JSON... } }`, with no persona. `send()` receives the input as JSON text, calls the function, records anything in between (model calls, which model answered), and returns the output as text for the reviewer. Write the inputs yourself: realistic, varied, and aimed at where the function must make a judgment. `npx create-evals list` shows all inputs and outputs side by side, which is where rates and outliers show up.
+**Agents that aren't chats** (classifiers, triage, extractors, pipelines: one input → one output) use the same loop. Run `npx -y create-evals init --function`, and set `kind: "function"` plus an `example` input in the binding. Profiles are `{ "id": "...", "input": { ...any JSON... } }`, with no persona. `send()` receives the input as JSON text, calls the function, records anything in between (model calls, which model answered), and returns the output as text for the reviewer. Write the inputs yourself: realistic, varied, and aimed at where the function must make a judgment. `npx -y create-evals list` shows all inputs and outputs side by side, which is where rates and outliers show up.
 
 **Agents in another language** (Python, Go…): the binding is still TypeScript, and the agent runs as a child process, one per conversation:
 
@@ -91,7 +91,7 @@ The child reads `{"message", "profile"}` JSON lines and answers each with `@@CRE
 Then:
 
 ```bash
-npx create-evals check
+npx -y create-evals check
 ```
 
 This runs one short conversation and prints it, with every recorded event (`--message "…"` sends exactly one message instead). Fix what it reports. Before moving on, confirm three things by reading the output:
@@ -129,18 +129,20 @@ Most profiles should be ordinary users doing ordinary things over several turns.
 ## 3–5. Run, review, group
 
 ```bash
-npx create-evals run         # every profile once; --repeat 2 to see variance; --only id,id
-npx create-evals review      # a model reads each new trace and notes what went wrong, quoting evidence
-npx create-evals group       # merges the notes into failure modes: .create-evals/failures.json
+npx -y create-evals find        # = run + review + group
+# or step by step:
+npx -y create-evals run         # every profile once; --repeat 2 to see variance; --only id,id
+npx -y create-evals review      # a model reads each new trace and notes what went wrong, quoting evidence
+npx -y create-evals group       # merges the notes into failure modes: .create-evals/failures.json
 ```
 
-Then do what the tools can't: **read**. Open at least the traces behind each failure mode with `npx create-evals show <trace-id>`, plus a few marked ok.
+Then do what the tools can't: **read**. Open at least the traces behind each failure mode with `npx -y create-evals show <trace-id>`, plus a few marked ok.
 - Drop notes that are wrong: the reviewer misread something, or the simulated user caused it.
 - Look for what the reviewer can't see: failures caused by the instructions themselves (the agent obeys and the user still hits a dead end), and patterns that only show across many conversations.
 - Fix your fakes if *they* misbehaved, and re-run.
 - If the reviewer missed something you can see, note it yourself.
 
-Traces from setup mistakes or broken fakes shouldn't count: remove them with `npx create-evals drop <trace-id…>`. Start a clean round with `npx create-evals reset` (it archives the old one). When you regroup, new failure modes are marked `[new]`.
+Traces from setup mistakes or broken fakes shouldn't count: remove them with `npx -y create-evals drop <trace-id…>`. Start a clean round with `npx -y create-evals reset` (it archives the old one). When you regroup, new failure modes are marked `[new]`.
 
 **If you found little, the profiles were too easy.** Write a harder round aimed at what earlier runs never touched (tools never called, rules never tested, longer conversations, users who push back). Run, review and group again. Two or three rounds is normal. Stop when a new round finds nothing new.
 
@@ -159,7 +161,7 @@ Write `evals/evals.md`, the human-readable record of what this agent should do:
 ```markdown
 # Evals: booking-agent
 
-What the agent must and mustn't do. Every rule has tests in evals/*.eval.ts: `npx create-evals test`.
+What the agent must and mustn't do. Every rule has tests in evals/*.eval.ts: `npx -y create-evals test`.
 
 ## Never tells a guest that a real booking is fake
 Found in 10 of 13 simulated conversations. Tests: booking-flow.eval.ts
@@ -193,18 +195,18 @@ scenario(agent, "never disowns a booking it made", {
 - Start from the failing trace's profile, and sharpen it so it reliably walks into the situation.
 - Check the end state and actions first, the agent's words second, and use `expectJudge` only for what only the text can show.
 - Every test also fails on empty replies, agent errors and blocked network calls, without you writing anything. Use `allow: ["repeated-reply"]` to tolerate a specific check.
-- **A test must fail on today's agent before it counts.** Run `npx create-evals test --only "<name>"`. If it passes, sharpen the persona or the check until it reproduces the failure. A test that can't reproduce the bug proves nothing.
+- **A test must fail on today's agent before it counts.** Run `npx -y create-evals test --only "<name>"`. If it passes, sharpen the persona or the check until it reproduces the failure. A test that can't reproduce the bug proves nothing.
 - Use `runs: 2` or 3. New tests are tier `"usually"` (reported, not blocking). Promote a test to `tier: "always"` (blocks CI) once it has passed reliably after the fix.
 - **Guard tests.** Rules that only the prompt enforces can hold today and break with the next prompt or model change. For the important ones, write a test even though it passes now. Then prove it has teeth: in a scratch copy of the repo, delete that rule from the prompt and run the test. It should fail. If it still passes, the test doesn't guard the rule; sharpen it.
 
-Add `"evals": "create-evals test"` to package.json scripts.
+If the repo has a package.json, add `"evals": "npx -y create-evals test"` to its scripts; otherwise tell the developer the command.
 
 ## 8. Report
 
 Tell the developer:
 - **What's broken**, most important first: each confirmed failure mode, how often, one quoted example, and the test that catches it (which fails right now).
 - **What's set up:** the binding, which systems are faked and which are real (anything wrapped at step 4 is untested code), and `evals/evals.md`.
-- **How to run:** `npm run evals`. It makes real model calls, so it costs money and needs the agent's API key. Runs on every PR should use `--tier always`.
+- **How to run:** `npx create-evals test` (or `npm run evals`). It makes real model calls, so it costs money and needs the agent's API key. Runs on every PR should use `--tier always`.
 - **Next:** fix the bugs (offer to help). When a test passes reliably, promote it to `always`. Re-run the loop after big changes to the prompt or tools, or on real production conversations when there are some.
 
 ## Reference

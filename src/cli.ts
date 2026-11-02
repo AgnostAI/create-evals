@@ -12,29 +12,31 @@ import { registered, setCurrentFile, type Registered } from "./scenario.js";
 import { render } from "./trace.js";
 import type { FailureMode, Profile, Trace } from "./types.js";
 
-const VERSION = "1.0.0-alpha.0";
+const VERSION = "0.1.0";
 const tty = process.stdout.isTTY;
 const c = (code: number) => (s: string) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
 const [bold, dim, red, green, yellow] = [c(1), c(2), c(31), c(32), c(33)];
 
 const HELP = `${bold("create-evals")} ${VERSION}: find your agent's real failures and turn each one into a test.
 
-  create-evals init [--function]    scaffold evals/agent.ts (a chat agent, or a one-input function) and ${CONFIG_PATH}
-  create-evals check [--message m]  run one short conversation (or one message) to prove the setup works
-  create-evals run [--profiles f] [--only id,id] [--repeat n]
-                                    run simulated users against the agent; saves traces
-  create-evals review [--all]       read each new trace and note what the agent did wrong
-  create-evals group                merge the notes into failure modes (${DIR}/failures.json)
-  create-evals drop <trace-id…>     delete traces that shouldn't count (setup mistakes, broken fakes)
-  create-evals reset                archive traces and failures to ${DIR}/archive/ and start a fresh round
-  create-evals show <trace-id> [--full]
-                                    print a conversation and its review
-  create-evals test [files] [--runs n] [--tier always]
-                                    run the tests in evals/*.eval.ts
-  create-evals list                 every run in one table: input, outcome, output, problems
-  create-evals status               what's been run, reviewed and grouped
+${bold("Start here")}
+  npx create-evals                  set up the skill, then open your coding agent and run /create-evals
 
-Options: --config <file> (default ${CONFIG_PATH}), --model <id> (review/group), --user-model <id>, --concurrency <n>
+${bold("Day to day")}
+  create-evals find                 run simulated users, review every conversation, list what went wrong
+  create-evals test                 run the tests in evals/ (--tier always in CI)
+
+${bold("Building blocks")} (the skill uses these)
+  init [--function]                 scaffold evals/agent.ts and ${CONFIG_PATH}
+  check [--message m]               one short conversation, to prove the setup works
+  run [--profiles f] [--only a,b] [--repeat n]
+  review [--all]                    note what went wrong in each new trace
+  group                             merge the notes into failure modes (${DIR}/failures.json)
+  list | show <id> [--full] | status
+  drop <id…> | reset                discard bad traces, or archive this round and start fresh
+  test [files] [--runs n] [--tier always|usually] [--only text]
+
+Options: --config <file>, --model <id> (review/group), --user-model <id>, --concurrency <n>
 Docs: https://github.com/AgnostAI/create-evals`;
 
 interface Flags {
@@ -192,6 +194,43 @@ export default defineAgent({
   },
 });
 `;
+
+/** `npx create-evals`: put the skill where coding agents look for it, then point the person at it. */
+function cmdSetup() {
+  const pkg = new URL("..", import.meta.url);
+  const skillDir = new URL("skill/create-evals/", pkg);
+  const done: string[] = [];
+  // Claude Code: .claude/skills/create-evals/SKILL.md
+  const dest = path.join(root, ".claude", "skills", "create-evals");
+  mkdirSync(dest, { recursive: true });
+  writeFileSync(path.join(dest, "SKILL.md"), readFileSync(new URL("SKILL.md", skillDir)));
+  done.push(".claude/skills/create-evals (Claude Code)");
+  // Codex, Cursor and others read AGENTS.md.
+  const agentsMd = path.join(root, "AGENTS.md");
+  const existing = existsSync(agentsMd) ? readFileSync(agentsMd, "utf8") : "";
+  if (!existing.includes("## create-evals")) {
+    writeFileSync(agentsMd, `${existing.replace(/\n*$/, existing ? "\n\n" : "")}${readFileSync(new URL("skill/AGENTS.md", pkg), "utf8")}`);
+    done.push("AGENTS.md (Codex, Cursor and others)");
+  }
+  for (const d of done) console.log(green(`✔ ${d}`));
+  console.log(`
+Now open your coding agent in this folder and say:
+
+  ${bold("/create-evals")}   ${dim("(or: \"find what my agent gets wrong and write evals for it\")")}
+
+It runs your agent against simulated users, shows you what went wrong, asks which are bugs,
+and writes tests. Needs ANTHROPIC_API_KEY.`);
+}
+
+/** run → review → group, for people: one command from "nothing" to "here's what's broken". */
+async function cmdFind(f: Flags) {
+  if (!existsSync(path.resolve(root, (f.profiles as string) || path.join(DIR, "profiles.json")))) {
+    fail(`No ${DIR}/profiles.json yet. Ask your coding agent to run /create-evals, which writes it for your agent.`);
+  }
+  await cmdRun(f);
+  await cmdReview(f);
+  await cmdGroup(f);
+}
 
 function cmdInit(f: Flags) {
   mkdirSync(path.join(root, "evals"), { recursive: true });
@@ -496,7 +535,9 @@ async function main() {
   if (f.version) return console.log(VERSION);
   if (typeof f.config === "string") configPath = f.config;
   const cmd = f._[0];
-  if (!cmd || f.help) return console.log(HELP);
+  if (f.help || cmd === "help") return console.log(HELP);
+  if (!cmd || cmd === "setup") return cmdSetup();
+  if (cmd === "find") return cmdFind(f);
   if (cmd === "init") return cmdInit(f);
   if (cmd === "list") return cmdList();
   if (cmd === "check") return cmdCheck(f);
