@@ -1,5 +1,5 @@
 import type { AgentDefinition } from "./agent.js";
-import { DEFAULT_MODELS, model } from "./llm.js";
+import { DEFAULT_MODELS, model, ModelError } from "./llm.js";
 import { render } from "./trace.js";
 import type { Profile, Trace } from "./types.js";
 
@@ -70,8 +70,19 @@ export async function judge(trace: Trace, criterion: string): Promise<{ pass: bo
   });
 }
 
+/** The judge couldn't give a verdict (e.g. the model declined): the run is skipped, not failed. */
+export class JudgeUnavailable extends Error {
+  name = "JudgeUnavailable";
+}
+
 /** `judge()`, throwing when the criterion isn't met. */
 export async function expectJudge(trace: Trace, criterion: string): Promise<void> {
-  const v = await judge(trace, criterion);
+  let v: { pass: boolean; reasoning: string };
+  try {
+    v = await judge(trace, criterion);
+  } catch (e) {
+    if (e instanceof ModelError) throw new JudgeUnavailable(`judge unavailable: ${e.message}`);
+    throw e;
+  }
   if (!v.pass) throw new Error(`Judge: "${criterion}" failed: ${v.reasoning}`);
 }

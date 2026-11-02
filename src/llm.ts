@@ -13,6 +13,8 @@ export interface JsonRequest {
   /** JSON Schema for the reply. Objects need `additionalProperties: false` and every key in `required`. */
   schema: Record<string, unknown>;
   maxTokens?: number;
+  /** Anthropic effort: lower is faster and cheaper. Defaults to the model's own default. */
+  effort?: "low" | "medium" | "high";
 }
 
 export interface Model {
@@ -72,15 +74,23 @@ export const model: Model = {
       if (choice?.message?.refusal) throw new ModelError(`${req.model} refused: ${choice.message.refusal}`);
       return JSON.parse(choice?.message?.content ?? "null") as T;
     }
+    // Server-side fallback: if the model declines (playing an adversarial user, reviewing a hostile
+    // transcript), the API retries on a fallback model inside the same call. Not available on Haiku.
+    const fallback = !/haiku/.test(p.id);
     const res = await post(
       "https://api.anthropic.com/v1/messages",
-      { "x-api-key": key("ANTHROPIC_API_KEY"), "anthropic-version": "2023-06-01" },
+      {
+        "x-api-key": key("ANTHROPIC_API_KEY"),
+        "anthropic-version": "2023-06-01",
+        ...(fallback ? { "anthropic-beta": "server-side-fallback-2026-07-01" } : {}),
+      },
       {
         model: p.id,
         max_tokens: req.maxTokens ?? 16_000,
         system: req.system,
         messages: req.messages,
-        output_config: { format: { type: "json_schema", schema: req.schema } },
+        output_config: { format: { type: "json_schema", schema: req.schema }, ...(req.effort ? { effort: req.effort } : {}) },
+        ...(fallback ? { fallbacks: "default" } : {}),
       },
     );
     if (res.stop_reason === "refusal") throw new ModelError(`${req.model} declined this request.`);

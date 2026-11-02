@@ -5,6 +5,7 @@ import { blocked, guardNetwork, shiftClock } from "../src/sandbox.js";
 describe("sandbox", () => {
   it("blocks hosts that aren't allowed, for fetch and node:http", async () => {
     guardNetwork(["allowed.example"]);
+    await expect(fetch("http://localhost:9/x")).rejects.toThrow(/blocked a request to localhost/);
     await expect(fetch("https://evil.example/x")).rejects.toThrow(/blocked a request to evil.example/);
     expect(() => http.request("http://evil.example/")).toThrow(/blocked/);
     expect(blocked).toContain("evil.example");

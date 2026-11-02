@@ -13,9 +13,9 @@ export interface Config {
   now?: string;
   /** Swap modules for fakes: { "src/google.ts": "evals/fakes/google.ts" } (repo-relative). */
   replace?: Record<string, string>;
-  /** Extra hosts the agent may reach (model APIs and localhost are always allowed). "*.example.com" works. */
+  /** Hosts the agent may reach besides model APIs. "*.example.com" matches subdomains; add "localhost" for local sandboxes. */
   allowHosts?: string[];
-  /** Env vars set before the agent loads. */
+  /** Env vars set before the agent loads (they win over .env and the shell). "${OTHER}" references another variable. */
   env?: Record<string, string>;
   /** Conversations at once. Default 4; use 1 if the binding shares state across conversations. */
   concurrency?: number;
@@ -40,7 +40,8 @@ export async function prepare(root: string, config: Config) {
   prepared = true;
   const envFile = path.join(root, ".env");
   if (existsSync(envFile)) process.loadEnvFile(envFile);
-  for (const [k, v] of Object.entries(config.env ?? {})) process.env[k] = v;
+  // "${OTHER_VAR}" in a value is replaced with that variable, e.g. "OPENAI_API_KEY": "${ANTHROPIC_API_KEY}".
+  for (const [k, v] of Object.entries(config.env ?? {})) process.env[k] = v.replace(/\$\{(\w+)\}/g, (_, name) => process.env[name] ?? "");
   guardNetwork(config.allowHosts);
   if (config.now) shiftClock(config.now);
 

@@ -23,11 +23,12 @@ function hostOf(target: unknown): string | undefined {
 }
 
 /**
- * Block every outgoing request except model APIs, localhost, and `allow`. A blocked request throws
+ * Block every outgoing request except model APIs and `allow`. A blocked request throws
  * and is recorded on the conversation, so a missed integration fails loudly instead of acting for real.
  */
 export function guardNetwork(allow: string[] = []) {
-  const allowed = new Set([...MODEL_HOSTS, "localhost", "127.0.0.1", "::1", ...allow]);
+  // Localhost isn't allowed by default: analytics and local backends often live there. Add it if a sandbox needs it.
+  const allowed = new Set([...MODEL_HOSTS, ...allow]);
   const permitted = (host: string | undefined) => !host || allowed.has(host) || [...allowed].some((a) => a.startsWith("*.") && host.endsWith(a.slice(1)));
   const deny = (host: string) => {
     blocked.push(host);

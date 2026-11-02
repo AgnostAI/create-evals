@@ -25,7 +25,8 @@ const HELP = `${bold("create-evals")} ${VERSION}: find your agent's real failure
                                     run simulated users against the agent; saves traces
   create-evals review [--all]       read each new trace and note what the agent did wrong
   create-evals group                merge the notes into failure modes (${DIR}/failures.json)
-  create-evals show <trace-id>      print a conversation and its review
+  create-evals show <trace-id> [--full]
+                                    print a conversation and its review
   create-evals test [files] [--runs n] [--tier always]
                                     run the tests in evals/*.eval.ts
   create-evals status               what's been run, reviewed and grouped
@@ -43,7 +44,7 @@ function parse(argv: string[]): Flags {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (!a.startsWith("--")) f._.push(a);
-    else if (["--all", "--help", "--version"].includes(a)) f[a.slice(2)] = true;
+    else if (["--all", "--help", "--version", "--full"].includes(a)) f[a.slice(2)] = true;
     else f[a.slice(2)] = argv[++i] ?? "";
   }
   return f;
@@ -51,7 +52,7 @@ function parse(argv: string[]): Flags {
 
 const root = process.cwd();
 const dir = (...p: string[]) => path.join(root, DIR, ...p);
-const tracesDir = () => dir("traces");
+const tracesDir = (kind: "runs" | "tests" | "checks" = "runs") => dir({ runs: "traces", tests: "test-traces", checks: "check-traces" }[kind]);
 
 function fail(msg: string): never {
   console.error(red(`✖ ${msg}`));
@@ -67,16 +68,16 @@ function readJson<T>(file: string): T {
   }
 }
 
-function saveTrace(t: Trace) {
-  mkdirSync(tracesDir(), { recursive: true });
-  writeFileSync(path.join(tracesDir(), `${t.id}.json`), JSON.stringify(t, null, 2) + "\n");
+function saveTrace(t: Trace, kind: "runs" | "tests" | "checks" = "runs") {
+  mkdirSync(tracesDir(kind), { recursive: true });
+  writeFileSync(path.join(tracesDir(kind), `${t.id}.json`), JSON.stringify(t, null, 2) + "\n");
 }
 
-function allTraces(): Trace[] {
-  if (!existsSync(tracesDir())) return [];
-  return readdirSync(tracesDir())
-    .filter((f) => f.endsWith(".json"))
-    .map((f) => JSON.parse(readFileSync(path.join(tracesDir(), f), "utf8")) as Trace)
+/** Traces from `run` (what review and group use), or from every source (for `show`). */
+function allTraces(kinds: ("runs" | "tests" | "checks")[] = ["runs"]): Trace[] {
+  return kinds
+    .flatMap((k) => (existsSync(tracesDir(k)) ? readdirSync(tracesDir(k)).filter((f) => f.endsWith(".json")).map((f) => path.join(tracesDir(k), f)) : []))
+    .map((f) => JSON.parse(readFileSync(f, "utf8")) as Trace)
     .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
 }
 
@@ -113,9 +114,10 @@ export default defineAgent({
     const history: unknown[] = [];
     return {
       async send(message) {
-        // Call the agent exactly as production does, keeping the full history (tool calls included).
-        // Record tool calls so the reviewer can check what the agent said against what it did:
-        // ctx.record({ kind: "tool", name, input, output });
+        // Call the agent exactly as production does, and keep history exactly as production keeps it
+        // (if the web page only sends text back, keep only text: that difference is where bugs hide).
+        // Record the agent's tool calls and every change your fakes make, so the reviewer can check
+        // what the agent said against what it did: ctx.record({ kind: "tool", name, input, output });
         throw new Error("evals/agent.ts: implement send()");
       },
       // What the agent changed, for the reviewer and tests:
@@ -156,7 +158,7 @@ async function cmdCheck() {
   };
   console.log(dim(`Running one short conversation with ${agent.name}…`));
   const t = await converse(agent, profile, { userModel: DEFAULT_MODELS.user });
-  saveTrace(t);
+  saveTrace(t, "checks");
   console.log(render(t));
   console.log();
   const problems: string[] = [];
@@ -203,7 +205,8 @@ async function cmdRun(f: Flags) {
 async function cmdReview(f: Flags) {
   const { config, agent } = await setup();
   const modelId = (f.model as string) || config.models?.review || DEFAULT_MODELS.review;
-  const todo = allTraces().filter((t) => f.all || !t.review);
+  // A conversation the simulated user never got going has nothing to review.
+  const todo = allTraces().filter((t) => (f.all || !t.review) && !(t.ended === "user-error" && t.turns.length < 2));
   if (!todo.length) return console.log("Nothing to review. Run `create-evals run` first, or pass --all.");
   const ctx = { description: agent.description, instructions: readInstructions(root, agent) };
   console.log(dim(`Reviewing ${todo.length} trace(s) with ${modelId}…`));
@@ -236,6 +239,7 @@ async function cmdGroup(f: Flags) {
   const reviewed = traces.filter((t) => t.review);
   if (!reviewed.length) fail("No reviewed traces. Run `create-evals review` first.");
   const modes = await group(reviewed, agent.description, modelId);
+  if (existsSync(dir("failures.json"))) writeFileSync(dir("failures.prev.json"), readFileSync(dir("failures.json")));
   writeFileSync(dir("failures.json"), JSON.stringify({ reviewed: reviewed.length, modes }, null, 2) + "\n");
   if (!modes.length) return console.log(green(`No problems found in ${reviewed.length} conversations. Make the profiles harder and run again.`));
   console.log(bold(`${modes.length} failure mode(s) across ${reviewed.length} reviewed conversations:\n`));
@@ -254,10 +258,10 @@ function printMode(m: FailureMode, total: number) {
 function cmdShow(f: Flags) {
   const id = f._[1];
   if (!id) fail("Usage: create-evals show <trace-id>");
-  const t = allTraces().find((x) => x.id === id || x.id.startsWith(id));
+  const t = allTraces(["runs", "tests", "checks"]).find((x) => x.id === id || x.id.startsWith(id));
   if (!t) fail(`No trace ${id}`);
   console.log(bold(`${t.id}`) + dim(`  persona: ${t.profile.persona.slice(0, 200)}`));
-  console.log(render(t));
+  console.log(render(t, { clip: f.full ? 100_000 : 240 }));
   if (t.checks.length) console.log(`\n${yellow("Basic checks:")} ${t.checks.map((x) => `${x.check} (${x.detail})`).join("; ")}`);
   if (t.review) {
     console.log(`\n${bold("Review")} ${dim(t.review.model)}: ${t.review.summary}`);
@@ -290,29 +294,44 @@ async function cmdTest(f: Flags) {
   console.log(dim(`Running ${tests.length} test(s)…`));
 
   const jobs = tests.flatMap((t) => Array.from({ length: runsOverride ?? t.opts.runs ?? 1 }, (_, i) => ({ t, i })));
-  const results = new Map<Registered, { pass: number; fails: { reason: string; trace: string }[] }>();
+  const results = new Map<Registered, { pass: number; skipped: number; fails: { reason: string; trace: string }[] }>();
   const queue = [...jobs];
   await Promise.all(
     Array.from({ length: Number(f.concurrency ?? config.concurrency ?? 4) }, async () => {
       for (let job = queue.shift(); job; job = queue.shift()) {
         const { t } = job;
-        const r = results.get(t) ?? { pass: 0, fails: [] };
+        const r = results.get(t) ?? { pass: 0, skipped: 0, fails: [] };
         results.set(t, r);
         const profile = { id: t.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40), ...t.opts.profile } as Profile;
         const trace = await converse(t.agent, profile, { userModel });
         trace.id = `test-${trace.id}`;
-        saveTrace(trace);
+        // The simulated user failing (e.g. a model declining the persona) says nothing about the agent.
+        if (trace.ended === "user-error" && trace.turns.length < 2) {
+          r.skipped++;
+          trace.test = { name: t.name, passed: false, reason: `skipped: ${trace.error}` };
+          saveTrace(trace, "tests");
+          continue;
+        }
         try {
           const bad = trace.checks.filter((x) => !(t.opts.allow ?? []).includes(x.check));
-          if (trace.ended === "user-error") throw new Error(trace.error);
           if (bad.length) throw new Error(`basic check: ${bad.map((x) => `${x.check} (${x.detail})`).join("; ")}`);
           const transcript = render(trace);
           const said = trace.turns.filter((x) => x.role === "agent").map((x) => x.text).join("\n");
           await t.opts.check?.({ trace, state: trace.state, transcript, said });
           r.pass++;
+          trace.test = { name: t.name, passed: true };
         } catch (e) {
-          r.fails.push({ reason: (e as Error).message.split("\n")[0]!.slice(0, 300), trace: trace.id });
+          const reason = (e as Error).message;
+          if ((e as Error).name === "JudgeUnavailable") {
+            r.skipped++;
+            trace.test = { name: t.name, passed: false, reason: `skipped: ${reason}` };
+            saveTrace(trace, "tests");
+            continue;
+          }
+          r.fails.push({ reason: reason.slice(0, 1200), trace: trace.id });
+          trace.test = { name: t.name, passed: false, reason };
         }
+        saveTrace(trace, "tests");
       }
     }),
   );
@@ -326,8 +345,9 @@ async function cmdTest(f: Flags) {
     const ok = r.pass >= need;
     if (!ok && tier === "always") blocking++;
     const mark = ok ? green("✔") : tier === "always" ? red("✖") : yellow("~");
-    console.log(`${mark} ${t.name} ${dim(`(${r.pass}/${runs}, ${tier}, ${t.file})`)}`);
-    for (const fl of r.fails.slice(0, 2)) console.log(dim(`    ${fl.reason}\n    → create-evals show ${fl.trace}`));
+    const skipped = r.skipped ? `, ${r.skipped} skipped (simulated user or judge failed)` : "";
+    console.log(`${mark} ${t.name} ${dim(`(${r.pass}/${runs}${skipped}, ${tier}, ${t.file})`)}`);
+    for (const fl of r.fails.slice(0, 2)) console.log(dim(`${fl.reason.replace(/^/gm, "    ")}\n    → create-evals show ${fl.trace}`));
   }
   const failing = tests.filter((t) => {
     const r = results.get(t)!;

@@ -36,8 +36,8 @@ Run from the agent's repo root. Every command that runs the agent sets up the sa
 | `agent` | The binding file. Default: `evals/agent.ts`. |
 | `now` | The clock (Date and Temporal) starts here and keeps ticking. Set before the agent loads. |
 | `replace` | Repo-relative module → fake. Imports that resolve to the module get the fake instead. The fake may import the real module itself (for types or helpers). |
-| `allowHosts` | Hosts the agent may reach. Model APIs (`api.anthropic.com`, `api.openai.com`) and localhost are always allowed; `*.domain` matches subdomains. Anything else throws and is recorded as a `network-blocked` event. |
-| `env` | Set before the agent loads. Wins over `.env`, which is also loaded if present. |
+| `allowHosts` | Hosts the agent may reach besides the model APIs (`api.anthropic.com` and `api.openai.com` are always allowed). `*.domain` matches subdomains. Add `localhost` for local sandboxes. Anything else throws and is recorded as a `network-blocked` event. |
+| `env` | Set before the agent loads. Wins over the shell and over `.env` (also loaded if present). `"${OTHER}"` inserts another variable, e.g. `"OPENAI_API_KEY": "${ANTHROPIC_API_KEY}"`. |
 | `concurrency` | Conversations at once for `run` and `test`. Default 4. |
 | `models` | `user`, `review`, `group`, `judge`. Default `claude-sonnet-5-5` for all. Env overrides: `CREATE_EVALS_USER_MODEL`, `CREATE_EVALS_REVIEW_MODEL`, `CREATE_EVALS_GROUP_MODEL`, `CREATE_EVALS_JUDGE_MODEL`. |
 
@@ -89,7 +89,7 @@ scenario(agent, "never disowns a booking it made", {
 });
 ```
 
-A run fails if `check` throws, if any basic check fires (unless it's in `allow`), or if the simulated user fails.
+A run fails if `check` throws or if any basic check fires (unless it's in `allow`). It's skipped, and counts neither way, if the simulated user or the judge fails (e.g. a model declines).
 
 ### `judge(trace, criterion)` and `expectJudge(trace, criterion)`
 

@@ -65,6 +65,8 @@ export interface Trace {
   checks: CheckFinding[];
   review?: Review;
   userModel: string;
+  /** Set by `create-evals test`: which test this run belonged to and why it failed. */
+  test?: { name: string; passed: boolean; reason?: string };
 }
 
 export interface FailureMode {

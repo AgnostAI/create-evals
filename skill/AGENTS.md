@@ -43,8 +43,8 @@ Never change the agent's source to make it testable without asking the developer
 
 **The config** (`evals/create-evals.json`):
 - `replace`: modules to swap for fakes.
-- `allowHosts`: hosts the agent may reach. Model APIs and localhost are always allowed; **everything else is blocked**, and a blocked call fails loudly in the trace.
-- `env`: variables set before the agent loads.
+- `allowHosts`: hosts the agent may reach. Model APIs are always allowed; **everything else is blocked**, localhost included (add `"localhost"` for a local sandbox), and a blocked call fails loudly in the trace.
+- `env`: variables set before the agent loads. `"${OTHER}"` references another variable, e.g. `"OPENAI_API_KEY": "${ANTHROPIC_API_KEY}"` with `"OPENAI_BASE_URL": "https://api.anthropic.com/v1/"` runs an OpenAI-SDK agent on Claude.
 - `now`: an ISO time the clock starts at. Use it when the agent's behavior depends on dates.
 - `concurrency`: set to 1 if conversations would share state.
 
@@ -96,6 +96,7 @@ npx create-evals group       # merges the notes into failure modes: .create-eval
 
 Then do what the tools can't: **read**. Open at least the traces behind each failure mode with `npx create-evals show <trace-id>`, plus a few marked ok.
 - Drop notes that are wrong: the reviewer misread something, or the simulated user caused it.
+- Look for what the reviewer can't see: failures caused by the instructions themselves (the agent obeys and the user still hits a dead end), and patterns that only show across many conversations.
 - Fix your fakes if *they* misbehaved, and re-run.
 - If the reviewer missed something you can see, note it yourself.
 
