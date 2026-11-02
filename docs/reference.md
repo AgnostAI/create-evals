@@ -100,6 +100,21 @@ A run fails if `check` throws or if any basic check fires (unless it's in `allow
 
 Ask a model whether the conversation meets one criterion. `judge` returns `{ pass, reasoning }`; `expectJudge` throws when the criterion isn't met. Use them only for what text alone shows, and pair them with a state check.
 
+### `spawnSession(ctx, command, options?)`
+
+Runs an agent in another process (Python, Go, anything) for one conversation. Use it as the session returned from `start()`:
+
+```ts
+start: (ctx) => spawnSession(ctx, [".venv/bin/python", "evals/run_agent.py"], { allowHosts: ["api.example.com"], env: { DATABASE_URL: "sqlite:///tmp/eval.db" } })
+```
+
+The child reads one `{"message", "profile"}` JSON line per user message on stdin, and answers each with a stdout line `@@CREATE_EVALS@@{"reply": "...", "events": [...], "state": ..., "error"?: "..."}`. Other output is ignored. Events are recorded on the trace, and the last `state` is the session's end state. The child gets `PYTHONPATH` with create-evals' Python helper, plus `CREATE_EVALS_ALLOW` (the allowed hosts).
+
+**Python helper** (`create_evals.py`, shipped in the package):
+- `guard(allow=())`: blocks DNS and connections except model APIs, `CREATE_EVALS_ALLOW` and `allow`. Call it before importing the app.
+- `record(kind, name, input, output)`: records a tool call or state change.
+- `serve(handle, state=None)`: answers lines with `handle(message, profile)`.
+
 ### `render(trace)`
 
 The transcript as the reviewer sees it: turns, with events interleaved, and the end state.

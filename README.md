@@ -95,6 +95,6 @@ scenario(agent, "never disowns a booking it made", {
 
 ## Status
 
-Alpha. Works with TypeScript and JavaScript agents. The binding is plain code, so any agent you can call from Node should work; Python agents driven through a subprocess are untested. [docs/plan.md](docs/plan.md) has what's done and what's next.
+Alpha. Works with TypeScript and JavaScript agents directly, and with Python agents (or any language) as a child process over a small line protocol. A Python helper ships in the package. [docs/plan.md](docs/plan.md) has what's done and what's next.
 
 MIT licensed.

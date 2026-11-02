@@ -82,5 +82,8 @@ src/
   trace.ts      render a trace as text
   scenario.ts   scenario(), judge(), expectJudge()
   llm.ts        Anthropic/OpenAI over fetch, JSON-schema output
+  spawn.ts      spawnSession(): agents in other languages over a JSON line protocol
   types.ts      Profile, Trace, Review, FailureMode
+python/
+  create_evals.py   the Python side of the line protocol: guard(), record(), serve()
 ```

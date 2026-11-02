@@ -50,7 +50,27 @@ Never change the agent's source to make it testable without asking the developer
 
 **Agents that aren't chats** (classifiers, triage, extractors, pipelines: one input → one output) use the same loop. Run `npx create-evals init --function`, and set `kind: "function"` plus an `example` input in the binding. Profiles are `{ "id": "...", "input": { ...any JSON... } }`, with no persona. `send()` receives the input as JSON text, calls the function, records anything in between (model calls, which model answered), and returns the output as text for the reviewer. Write the inputs yourself: realistic, varied, and aimed at where the function must make a judgment. `npx create-evals list` shows all inputs and outputs side by side, which is where rates and outliers show up.
 
-**Agents in another language** (Python, Go…): the binding is still TypeScript. `start()` spawns the agent as a subprocess (or calls it over a local HTTP endpoint the binding starts, with `"localhost"` in `allowHosts`), and `send()` passes the message through. The network guard only covers the Node process, so point the child at fakes or test credentials through its environment, and say in the report what isn't guarded.
+**Agents in another language** (Python, Go…): the binding is still TypeScript, and the agent runs as a child process, one per conversation:
+
+```ts
+// evals/agent.ts
+import { defineAgent, spawnSession } from "create-evals";
+export default defineAgent({
+  name: "research-agent", description: "…", instructions: ["app/prompts.py"],
+  start: (ctx) => spawnSession(ctx, [".venv/bin/python", "evals/run_agent.py"], { allowHosts: [] }),
+});
+```
+
+```python
+# evals/run_agent.py (create_evals.py ships with the package and is put on PYTHONPATH for you)
+from create_evals import guard, record, serve
+guard()                          # first: blocks every host except model APIs and allowHosts
+from app.agent import Agent      # then import the real agent; fake what it calls here (monkeypatch)
+agent = Agent()
+serve(lambda message, profile: agent.reply(message), state=lambda: agent.snapshot())
+```
+
+The child reads `{"message", "profile"}` JSON lines and answers each with `@@CREATE_EVALS@@{"reply", "events", "state"}`. `create_evals.py` implements that for Python; any other language can do the same in a few lines. The Node sandbox doesn't reach the child, so call `guard()` before importing the app, swap out what the agent calls (monkeypatch the client or module), pin the clock there if dates matter, and use a temp database.
 
 **Awkward shapes:**
 - *Only reachable through a CLI or server* (nothing exported, or the module starts a loop on import): `start()` spawns it as a child process and talks to it over stdin/stdout or HTTP. That's still the real agent.
