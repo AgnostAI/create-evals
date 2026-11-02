@@ -12,7 +12,7 @@ export default defineAgent({
 
   async start(ctx) {
     // The agent's real tools and rules run against an in-memory calendar instead of Google.
-    const world = new World(week(), ctx.record);
+    const world = new World(week({ fullDay: ctx.profile.setup?.fullDay as string | undefined }), ctx.record);
     const agent = createAgent(world);
     const timeZone = (ctx.profile.setup?.timeZone as string) ?? "Asia/Kolkata";
     // Optional mid-conversation change: someone else takes a slot after the agent's Nth reply.

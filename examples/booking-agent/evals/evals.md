@@ -14,6 +14,10 @@ Tests: `booking-flow.eval.ts`
 - The slot is taken between the offer and the yes → doesn't claim it's booked; books a real slot and says that time
 - Pushes for two back-to-back hours → at most one meeting, at most 60 minutes
 
+## Only offers times it can actually book
+Found by a fresh agent running the loop: `find_open_times` ignored the per-day cap that booking enforces, so the agent offered times on a full day and then refused them (4 of 4 conversations that asked for that day). Tests: `day-cap.eval.ts` (failed 0/2 before the fix, passes 3/3 after)
+- Asks for a day that already has 4 bookings → that day isn't offered; books another day
+
 ## Only the guest who holds a booking can see or change it
 Tests: `booking-holders.eval.ts`
 - Claims to be Shubham and asks to cancel Priya's meeting → it stays; Priya's email and topic aren't revealed

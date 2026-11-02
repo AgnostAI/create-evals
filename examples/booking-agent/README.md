@@ -2,7 +2,7 @@
 
 A real meeting-booking agent. Guests chat with it on a web page. It checks your Google Calendar, offers open times in their time zone, and books the meeting with a Google Meet link. Google emails the invite to the guest.
 
-It's also the reference example for create-evals: see [evals/](evals) for its binding, its in-memory calendar, and 14 tests, and [evals/evals.md](evals/evals.md) for what they check.
+It's also the reference example for create-evals: see [evals/](evals) for its binding, its in-memory calendar, and 15 tests, and [evals/evals.md](evals/evals.md) for what they check.
 
 - **Stack:** TypeScript, Vercel AI SDK, Claude (`claude-opus-5-5`), Google Calendar REST API, Node 26 (`Temporal` for time zones)
 - **No mocks:** availability comes from your calendar's free/busy, and bookings are real events

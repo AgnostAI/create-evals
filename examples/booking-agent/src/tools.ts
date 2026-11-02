@@ -90,7 +90,14 @@ export function createTools(calendar: Calendar, clock: () => Temporal.Instant = 
 
         const pad = { minutes: config.bufferMinutes };
         const busy = await calendar.busyBetween(from.subtract(pad), to.add(pad).add({ minutes: duration_minutes }));
-        const slots = openSlots(from, to, duration_minutes, busy, now, rules);
+        const free = openSlots(from, to, duration_minutes, busy, now, rules);
+        // Only offer what book_meeting will accept: skip days that already hit the per-day cap.
+        const full = new Map<string, boolean>();
+        for (const s of free) {
+          const day = s.toZonedDateTimeISO(config.timeZone).toPlainDate().toString();
+          if (!full.has(day)) full.set(day, await dayIsFull(s));
+        }
+        const slots = free.filter((s) => !full.get(s.toZonedDateTimeISO(config.timeZone).toPlainDate().toString()));
         const days = new Map<string, { start: string; time: string }[]>();
         for (const s of slots.slice(0, 60)) {
           const z = s.toZonedDateTimeISO(time_zone);

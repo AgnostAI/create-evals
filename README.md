@@ -91,7 +91,7 @@ scenario(agent, "never disowns a booking it made", {
 - [Architecture](docs/architecture.md): the pieces and how a run works.
 - [Reference](docs/reference.md): the CLI, the config, the runtime API, and file formats.
 - [The skill](skill/create-evals/SKILL.md): the step-by-step instructions coding agents follow.
-- [Example](examples/booking-agent): a real booking agent with its binding, fakes and 14 tests.
+- [Example](examples/booking-agent): a real booking agent with its binding, fakes and 15 tests.
 
 ## Status
 
