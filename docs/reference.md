@@ -7,7 +7,7 @@ Run from the agent's repo root. Every command that runs the agent sets up the sa
 | Command | Does |
 |---|---|
 | `create-evals init [--function]` | Writes `evals/agent.ts` (a chat binding, or a one-input function binding with `--function`) and `evals/create-evals.json`, and gitignores `.create-evals/`. Existing files are kept. |
-| `create-evals check` | Runs one short conversation (2 turns) and prints it with every event. Fails on agent errors, empty replies and blocked requests. Warns when no events or end state were recorded. |
+| `create-evals check [--message m]` | Runs one short conversation (2 turns, or exactly one message with `--message`) and prints it with every event. Fails on agent errors, empty replies and blocked requests. Warns when no events or end state were recorded. |
 | `create-evals run [--profiles file] [--only a,b] [--repeat n] [--concurrency n] [--user-model m]` | Runs simulated users from `.create-evals/profiles.json` and saves each trace to `.create-evals/traces/`. |
 | `create-evals review [--all] [--model m]` | Reviews traces without a review, or all of them with `--all`. Writes the review into each trace file. |
 | `create-evals group [--model m]` | Groups all reviewed problems into failure modes and writes `.create-evals/failures.json`. |
@@ -41,6 +41,7 @@ Run from the agent's repo root. Every command that runs the agent sets up the sa
 | `replace` | Repo-relative module → fake. Imports that resolve to the module get the fake instead. The fake may import the real module itself (for types or helpers). |
 | `allowHosts` | Hosts the agent may reach besides the model APIs (`api.anthropic.com` and `api.openai.com` are always allowed). `*.domain` matches subdomains. Add `localhost` for local sandboxes. Anything else throws and is recorded as a `network-blocked` event. |
 | `env` | Set before the agent loads. Wins over the shell and over `.env` (also loaded if present). `"${OTHER}"` inserts another variable, e.g. `"OPENAI_API_KEY": "${ANTHROPIC_API_KEY}"`. |
+| `cwd` | Directory the agent runs in, for agents that open files relative to the working directory. |
 | `concurrency` | Conversations at once for `run` and `test`. Default 4. |
 | `models` | `user`, `review`, `group`, `judge`. Default `claude-sonnet-5-5` for all. The `CREATE_EVALS_{USER,REVIEW,GROUP,JUDGE}_MODEL` env vars win over this; `--model` and `--user-model` win over both. |
 

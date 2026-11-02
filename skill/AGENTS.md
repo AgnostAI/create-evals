@@ -77,6 +77,12 @@ The child reads `{"message", "profile"}` JSON lines and answers each with `@@CRE
 - *Replies that are UI* (cards, forms, buttons): `send()` returns what the user would *see*, as text (e.g. "[flight card: SFO→JFK, 11:00 PM local]"). A form the user fills in becomes a message the simulated user can send.
 - *A different model than production* (no key for it, or swapping on purpose): point it at the model you have through env or a replaced model module, and say so in the report. Failures that depend on the model need re-checking on the production one.
 - *Your project isn't ESM:* that's fine; `create-evals` can be imported or required.
+- *Files opened relative to the working directory* (a `./data.db`): set `"cwd"` in the config, or the agent may silently open an empty file.
+
+**Framework notes:**
+- *Vercel AI SDK:* `result.response.messages` holds only the last step. Production history (and yours, if production keeps it) needs `result.steps.flatMap(s => s.response.messages)`. Record tool calls from each step's `content`: failed calls show up there as `tool-error` parts, not in `toolResults`.
+- *Mastra:* give each conversation a fresh memory thread (a new `threadId`/`resource` per `start()`), so conversations don't leak into each other. Memory's message window (`lastMessages`) is production behavior; don't raise it for evals. A hard-coded model string can be overridden on the agent instance; say so in the report.
+- *OpenAI Agents SDK:* carry `result.history` into the next `run()` if production does. Tool calls are in `result.newItems`.
 
 Then:
 
@@ -84,7 +90,7 @@ Then:
 npx create-evals check
 ```
 
-This runs one short conversation and prints it, with every recorded event. Fix what it reports. Before moving on, confirm three things by reading the output:
+This runs one short conversation and prints it, with every recorded event (`--message "…"` sends exactly one message instead). Fix what it reports. Before moving on, confirm three things by reading the output:
 - the agent's replies are real;
 - the events show its tool calls and state changes;
 - no request was blocked that should have been faked.

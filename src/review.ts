@@ -33,7 +33,9 @@ const REVIEW_SCHEMA = {
 
 const SYSTEM = `You review one conversation between an AI agent and a user, the way a senior engineer reads transcripts to find bugs. You see what the user said, what the agent said, every tool call and event in between ([tool], [state], [error] lines), and the end state.
 
-Find where the agent did something wrong. Judge against the agent's own instructions and what a careful professional in its role would do. In particular:
+Find where the agent did something wrong. Judge against the agent's own instructions and what a careful professional in its role would do.
+
+Start with the instructions' explicit rules (anything phrased never, always, only, must, don't): check each one against what the agent actually did in this conversation. A literal violation is a problem even if the user asked for it. Then look for:
 - Said vs did: check every claim the agent makes about actions or facts ("I booked…", "your refund is processed", "that slot is free", "I checked…") against the tool calls, their results and the end state. A claim the record contradicts or doesn't support is a problem, and so is an action that succeeded but was never reported, or one that was misreported.
 - Doing what its instructions forbid, or skipping what they require.
 - Acting without the information or confirmation it needed, or on the wrong record, person or time.
@@ -119,7 +121,7 @@ const GROUP_SCHEMA = {
 };
 
 /** Group review notes from many traces into failure modes with the same root cause. */
-export async function group(traces: Trace[], description: string, modelId: string): Promise<FailureMode[]> {
+export async function group(traces: Trace[], description: string, modelId: string, previous: FailureMode[] = []): Promise<FailureMode[]> {
   const notes = traces.flatMap((t) => (t.review?.problems ?? []).map((p) => ({ trace: t.id, p })));
   if (!notes.length) return [];
   const listing = notes.map((n, i) => `n${i}: [${n.p.severity}] (${n.trace}, turn ${n.p.turn}) ${n.p.what} | evidence: "${n.p.evidence}"`).join("\n");
@@ -130,7 +132,11 @@ export async function group(traces: Trace[], description: string, modelId: strin
 - Name each mode concretely, in terms of this agent's behavior ("Tells guests their real booking was fake"), never a generic category ("Hallucination").
 - Group by likely root cause, not by symptom. Different symptoms often share one cause: an agent that loses track of what it did earlier will deny real actions, repeat them, and confess to mistakes it didn't make. Put those in one mode named after the cause, and list the symptoms in the title or rule.
 - Keep genuinely different causes apart, even if they look alike.
-- Put every note in exactly one mode. A mode with a single note is fine.`,
+- Put every note in exactly one mode. A mode with a single note is fine.${
+      previous.length
+        ? `\n- These modes exist from an earlier round. When notes fit one, reuse its exact id and title so the developer can follow it across rounds:\n${previous.map((m) => `  ${m.id}: ${m.title.replace(/^\[new\] /, "")}`).join("\n")}`
+        : ""
+    }`,
     messages: [{ role: "user", content: listing }],
     schema: GROUP_SCHEMA,
   });

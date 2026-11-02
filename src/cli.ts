@@ -20,7 +20,7 @@ const [bold, dim, red, green, yellow] = [c(1), c(2), c(31), c(32), c(33)];
 const HELP = `${bold("create-evals")} ${VERSION}: find your agent's real failures and turn each one into a test.
 
   create-evals init [--function]    scaffold evals/agent.ts (a chat agent, or a one-input function) and ${CONFIG_PATH}
-  create-evals check                run one short conversation to prove the setup works
+  create-evals check [--message m]  run one short conversation (or one message) to prove the setup works
   create-evals run [--profiles f] [--only id,id] [--repeat n]
                                     run simulated users against the agent; saves traces
   create-evals review [--all]       read each new trace and note what the agent did wrong
@@ -213,12 +213,12 @@ function cmdInit(f: Flags) {
   }
 }
 
-async function cmdCheck() {
+async function cmdCheck(f: Flags) {
   const { agent } = await setup();
-  const fn = agent.kind === "function";
-  if (fn && agent.example === undefined) fail('A function agent needs an `example` input in evals/agent.ts for check to send.');
+  const fn = agent.kind === "function" || typeof f.message === "string";
+  if (fn && agent.example === undefined && typeof f.message !== "string") fail('A function agent needs an `example` input in evals/agent.ts (or pass --message) for check to send.');
   const profile: Profile = fn
-    ? { id: "check", input: agent.example }
+    ? { id: "check", input: typeof f.message === "string" ? f.message : agent.example }
     : {
         id: "check",
         persona: `You're trying this agent for the first time. ${agent.example !== undefined ? `Open with exactly: "${agent.example}".` : "Ask one realistic, simple question it's meant to handle."} Then ask one follow-up that depends on its previous answer. Then stop.`,
@@ -314,10 +314,11 @@ async function cmdGroup(f: Flags) {
   const traces = allTraces();
   const reviewed = traces.filter((t) => t.review);
   if (!reviewed.length) fail("No reviewed traces. Run `create-evals review` first.");
-  const modes = await group(reviewed, agent.description, modelId);
   const previous = existsSync(dir("failures.json")) ? readJson<{ modes: FailureMode[] }>(dir("failures.json")).modes : [];
+  const modes = await group(reviewed, agent.description, modelId, previous);
   const seen = new Set(previous.flatMap((m) => m.traces));
-  for (const m of modes) if (previous.length && !m.traces.some((t) => seen.has(t))) m.title = `[new] ${m.title}`;
+  const known = new Set(previous.map((m) => m.id));
+  for (const m of modes) if (previous.length && !known.has(m.id) && !m.traces.some((t) => seen.has(t))) m.title = `[new] ${m.title}`;
   if (previous.length) writeFileSync(dir("failures.prev.json"), readFileSync(dir("failures.json")));
   writeFileSync(dir("failures.json"), JSON.stringify({ reviewed: reviewed.length, modes }, null, 2) + "\n");
   if (!modes.length) return console.log(green(`No problems found in ${reviewed.length} conversations. Make the profiles harder and run again.`));
@@ -359,11 +360,12 @@ function cmdList() {
   };
   for (const t of traces) {
     const first = t.turns.find((x) => x.role === "user")?.text ?? "";
-    const last = [...t.turns].reverse().find((x) => x.role === "agent")?.text ?? "";
+    // For a function, the output is the answer; for a chat, the review summary says more than a closing "you're welcome".
+    const last = t.profile.input !== undefined ? ([...t.turns].reverse().find((x) => x.role === "agent")?.text ?? "") : (t.review?.summary ?? [...t.turns].reverse().find((x) => x.role === "agent")?.text ?? "");
     const probs = t.review ? (t.review.problems.length ? yellow(`${t.review.problems.length} problem(s)`) : green("ok")) : dim("not reviewed");
     console.log(`${bold(t.id)}  ${dim(`${t.turns.filter((x) => x.role === "agent").length} turns, ${t.ended}`)}  ${probs}${t.checks.length ? yellow(`  ${t.checks.map((c) => c.check).join(",")}`) : ""}`);
     console.log(`  in:  ${one(first, 150)}`);
-    console.log(`  out: ${one(last || "[empty]", 150)}`);
+    console.log(`  ${t.profile.input !== undefined || !t.review ? "out" : "summary"}: ${one(last || "[empty]", 150)}`);
   }
   console.log(dim(`\n${traces.length} runs. Full detail: create-evals show <id>`));
 }
@@ -494,7 +496,7 @@ async function main() {
   if (!cmd || f.help) return console.log(HELP);
   if (cmd === "init") return cmdInit(f);
   if (cmd === "list") return cmdList();
-  if (cmd === "check") return cmdCheck();
+  if (cmd === "check") return cmdCheck(f);
   if (cmd === "run") return cmdRun(f);
   if (cmd === "review") return cmdReview(f);
   if (cmd === "group") return cmdGroup(f);

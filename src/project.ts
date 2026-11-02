@@ -17,6 +17,8 @@ export interface Config {
   allowHosts?: string[];
   /** Env vars set before the agent loads (they win over .env and the shell). "${OTHER}" references another variable. */
   env?: Record<string, string>;
+  /** Directory the agent runs in (repo-relative), for agents that open files relative to the working directory. */
+  cwd?: string;
   /** Conversations at once. Default 4; use 1 if the binding shares state across conversations. */
   concurrency?: number;
   /** Override the models create-evals uses. */
@@ -45,6 +47,7 @@ export async function prepare(root: string, config: Config) {
   const models = config.models ?? {};
   for (const [role, id] of Object.entries(models)) if (id) process.env[`CREATE_EVALS_${role.toUpperCase()}_MODEL`] ??= id;
   guardNetwork(config.allowHosts);
+  if (config.cwd) process.chdir(path.resolve(root, config.cwd));
   if (config.now) shiftClock(config.now);
 
   const { register: registerTsx } = await import("tsx/esm/api");
