@@ -17,7 +17,7 @@ function system(agent: AgentDefinition, profile: Profile): string {
 ${agent.name}: ${agent.description}
 
 Who you are, what you want, and how you behave:
-${profile.persona}
+${profile.persona ?? "An ordinary user of this agent."}
 
 Today is ${new Date().toString()}.
 

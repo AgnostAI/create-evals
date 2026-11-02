@@ -2,7 +2,12 @@
 export interface Profile {
   id: string;
   /** Who the user is, what they want, how they behave, and what they know. Written for this agent. */
-  persona: string;
+  persona?: string;
+  /**
+   * For agents that aren't chats: the exact input (any JSON value). The conversation is one turn:
+   * `send()` receives it as JSON text (or as-is, if it's a string), and no simulated user is called.
+   */
+  input?: unknown;
   /** Agent-specific setup handed to `start()`, e.g. which world seed to load or the user's time zone. */
   setup?: Record<string, unknown>;
   /** Exact first message, if the scenario depends on it. */

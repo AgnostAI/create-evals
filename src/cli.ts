@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AgentDefinition } from "./agent.js";
@@ -19,16 +19,19 @@ const [bold, dim, red, green, yellow] = [c(1), c(2), c(31), c(32), c(33)];
 
 const HELP = `${bold("create-evals")} ${VERSION}: find your agent's real failures and turn each one into a test.
 
-  create-evals init                 scaffold evals/agent.ts and ${CONFIG_PATH}
+  create-evals init [--function]    scaffold evals/agent.ts (a chat agent, or a one-input function) and ${CONFIG_PATH}
   create-evals check                run one short conversation to prove the setup works
   create-evals run [--profiles f] [--only id,id] [--repeat n]
                                     run simulated users against the agent; saves traces
   create-evals review [--all]       read each new trace and note what the agent did wrong
   create-evals group                merge the notes into failure modes (${DIR}/failures.json)
+  create-evals drop <trace-id…>     delete traces that shouldn't count (setup mistakes, broken fakes)
+  create-evals reset                archive traces and failures to ${DIR}/archive/ and start a fresh round
   create-evals show <trace-id> [--full]
                                     print a conversation and its review
   create-evals test [files] [--runs n] [--tier always]
                                     run the tests in evals/*.eval.ts
+  create-evals list                 every run in one table: input, outcome, output, problems
   create-evals status               what's been run, reviewed and grouped
 
 Options: --model <id> (review/group), --user-model <id>, --concurrency <n>
@@ -44,7 +47,7 @@ function parse(argv: string[]): Flags {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (!a.startsWith("--")) f._.push(a);
-    else if (["--all", "--help", "--version", "--full"].includes(a)) f[a.slice(2)] = true;
+    else if (["--all", "--help", "--version", "--full", "--function"].includes(a)) f[a.slice(2)] = true;
     else f[a.slice(2)] = argv[++i] ?? "";
   }
   return f;
@@ -127,10 +130,36 @@ export default defineAgent({
 });
 `;
 
-function cmdInit() {
+const FUNCTION_TEMPLATE = `import { defineAgent } from "create-evals";
+// Import the function the way production calls it, e.g.:
+// import { triageTicket } from "../src/triage.js";
+
+export default defineAgent({
+  name: "my-function",
+  kind: "function",
+  description: "What the function decides or produces, and what happens with its output.",
+  instructions: ["src/prompt.ts"],
+  // A realistic input, sent by "create-evals check". Profiles use { "id": "...", "input": { ... } }.
+  example: { text: "…" },
+
+  async start(ctx) {
+    return {
+      async send(message) {
+        const input = JSON.parse(message);
+        // const output = await triageTicket(input);
+        // ctx.record({ kind: "tool", name: "model call", input: ..., output: ... });   // anything in between
+        // return JSON.stringify(output, null, 2);
+        throw new Error("evals/agent.ts: implement send()");
+      },
+    };
+  },
+});
+`;
+
+function cmdInit(f: Flags) {
   mkdirSync(path.join(root, "evals"), { recursive: true });
   const files: [string, string][] = [
-    ["evals/agent.ts", AGENT_TEMPLATE],
+    ["evals/agent.ts", f.function ? FUNCTION_TEMPLATE : AGENT_TEMPLATE],
     [CONFIG_PATH, JSON.stringify({ agent: "evals/agent.ts", allowHosts: [], replace: {}, env: {} }, null, 2) + "\n"],
   ];
   for (const [rel, content] of files) {
@@ -151,11 +180,15 @@ function cmdInit() {
 
 async function cmdCheck() {
   const { agent } = await setup();
-  const profile: Profile = {
-    id: "check",
-    persona: `You're trying this agent for the first time. Ask one realistic, simple question it's meant to handle. Then ask one follow-up that depends on its previous answer. Then stop.`,
-    maxTurns: 2,
-  };
+  const fn = agent.kind === "function";
+  if (fn && agent.example === undefined) fail('A function agent needs an `example` input in evals/agent.ts for check to send.');
+  const profile: Profile = fn
+    ? { id: "check", input: agent.example }
+    : {
+        id: "check",
+        persona: `You're trying this agent for the first time. ${agent.example !== undefined ? `Open with exactly: "${agent.example}".` : "Ask one realistic, simple question it's meant to handle."} Then ask one follow-up that depends on its previous answer. Then stop.`,
+        maxTurns: 2,
+      };
   console.log(dim(`Running one short conversation with ${agent.name}…`));
   const t = await converse(agent, profile, { userModel: DEFAULT_MODELS.user });
   saveTrace(t, "checks");
@@ -164,7 +197,7 @@ async function cmdCheck() {
   const problems: string[] = [];
   const agentTurns = t.turns.filter((x) => x.role === "agent");
   if (t.ended === "agent-error") problems.push(`The agent threw: ${t.error}`);
-  if (agentTurns.length < 2 && t.ended !== "agent-error") problems.push("The conversation ended before a second turn.");
+  if (!fn && agentTurns.length < 2 && t.ended !== "agent-error") problems.push("The conversation ended before a second turn.");
   if (agentTurns.some((x) => !x.text.trim())) problems.push("An agent reply was empty: does send() return the reply text?");
   if (blocked.length) problems.push(`Blocked network calls to: ${[...new Set(blocked)].join(", ")}. Fake them (evals/create-evals.json "replace") or allow them.`);
   const notes: string[] = [];
@@ -239,7 +272,10 @@ async function cmdGroup(f: Flags) {
   const reviewed = traces.filter((t) => t.review);
   if (!reviewed.length) fail("No reviewed traces. Run `create-evals review` first.");
   const modes = await group(reviewed, agent.description, modelId);
-  if (existsSync(dir("failures.json"))) writeFileSync(dir("failures.prev.json"), readFileSync(dir("failures.json")));
+  const previous = existsSync(dir("failures.json")) ? readJson<{ modes: FailureMode[] }>(dir("failures.json")).modes : [];
+  const seen = new Set(previous.flatMap((m) => m.traces));
+  for (const m of modes) if (previous.length && !m.traces.some((t) => seen.has(t))) m.title = `[new] ${m.title}`;
+  if (previous.length) writeFileSync(dir("failures.prev.json"), readFileSync(dir("failures.json")));
   writeFileSync(dir("failures.json"), JSON.stringify({ reviewed: reviewed.length, modes }, null, 2) + "\n");
   if (!modes.length) return console.log(green(`No problems found in ${reviewed.length} conversations. Make the profiles harder and run again.`));
   console.log(bold(`${modes.length} failure mode(s) across ${reviewed.length} reviewed conversations:\n`));
@@ -260,7 +296,7 @@ function cmdShow(f: Flags) {
   if (!id) fail("Usage: create-evals show <trace-id>");
   const t = allTraces(["runs", "tests", "checks"]).find((x) => x.id === id || x.id.startsWith(id));
   if (!t) fail(`No trace ${id}`);
-  console.log(bold(`${t.id}`) + dim(`  persona: ${t.profile.persona.slice(0, 200)}`));
+  console.log(bold(`${t.id}`) + dim(`  persona: ${(t.profile.persona ?? JSON.stringify(t.profile.input) ?? "").slice(0, 200)}`));
   console.log(render(t, { clip: f.full ? 100_000 : 240 }));
   if (t.checks.length) console.log(`\n${yellow("Basic checks:")} ${t.checks.map((x) => `${x.check} (${x.detail})`).join("; ")}`);
   if (t.review) {
@@ -268,6 +304,52 @@ function cmdShow(f: Flags) {
     for (const p of t.review.problems) console.log(`  [${p.severity}] turn ${p.turn}: ${p.what}\n    "${p.evidence}"`);
     if (t.review.simulatorIssues.length) console.log(dim(`  simulator: ${t.review.simulatorIssues.join("; ")}`));
   }
+}
+
+/** Every run trace on one screen, so patterns across runs (rates, outliers) are visible. */
+function cmdList() {
+  const traces = allTraces();
+  if (!traces.length) return console.log("No traces yet. Run `create-evals run`.");
+  const one = (s: string, n: number) => {
+    const flat = s.replace(/\s+/g, " ").trim();
+    return flat.length > n ? `${flat.slice(0, n - 1)}…` : flat;
+  };
+  for (const t of traces) {
+    const first = t.turns.find((x) => x.role === "user")?.text ?? "";
+    const last = [...t.turns].reverse().find((x) => x.role === "agent")?.text ?? "";
+    const probs = t.review ? (t.review.problems.length ? yellow(`${t.review.problems.length} problem(s)`) : green("ok")) : dim("not reviewed");
+    console.log(`${bold(t.id)}  ${dim(`${t.turns.filter((x) => x.role === "agent").length} turns, ${t.ended}`)}  ${probs}${t.checks.length ? yellow(`  ${t.checks.map((c) => c.check).join(",")}`) : ""}`);
+    console.log(`  in:  ${one(first, 150)}`);
+    console.log(`  out: ${one(last || "[empty]", 150)}`);
+  }
+  console.log(dim(`\n${traces.length} runs. Full detail: create-evals show <id>`));
+}
+
+function cmdDrop(f: Flags) {
+  const ids = f._.slice(1);
+  if (!ids.length) fail("Usage: create-evals drop <trace-id…>");
+  for (const id of ids) {
+    const t = allTraces(["runs", "tests", "checks"]).find((x) => x.id === id || x.id.startsWith(id));
+    if (!t) {
+      console.log(yellow(`! no trace ${id}`));
+      continue;
+    }
+    for (const k of ["runs", "tests", "checks"] as const) rmSync(path.join(tracesDir(k), `${t.id}.json`), { force: true });
+    console.log(dim(`· dropped ${t.id}`));
+  }
+}
+
+function cmdReset() {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const dest = dir("archive", stamp);
+  let moved = 0;
+  for (const name of ["traces", "test-traces", "check-traces", "failures.json", "failures.prev.json"]) {
+    if (!existsSync(dir(name))) continue;
+    mkdirSync(dest, { recursive: true });
+    renameSync(dir(name), path.join(dest, name));
+    moved++;
+  }
+  console.log(moved ? green(`✔ archived the current round to ${path.relative(root, dest)}`) : "Nothing to archive.");
 }
 
 function cmdStatus() {
@@ -364,13 +446,16 @@ async function main() {
   if (f.version) return console.log(VERSION);
   const cmd = f._[0];
   if (!cmd || f.help) return console.log(HELP);
-  if (cmd === "init") return cmdInit();
+  if (cmd === "init") return cmdInit(f);
+  if (cmd === "list") return cmdList();
   if (cmd === "check") return cmdCheck();
   if (cmd === "run") return cmdRun(f);
   if (cmd === "review") return cmdReview(f);
   if (cmd === "group") return cmdGroup(f);
   if (cmd === "show") return cmdShow(f);
   if (cmd === "status") return cmdStatus();
+  if (cmd === "drop") return cmdDrop(f);
+  if (cmd === "reset") return cmdReset();
   if (cmd === "test") return cmdTest(f);
   fail(`Unknown command "${cmd}". Run create-evals --help.`);
 }

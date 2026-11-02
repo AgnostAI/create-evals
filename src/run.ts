@@ -30,10 +30,11 @@ export async function converse(agent: AgentDefinition, profile: Profile, opts: R
   await runInContext(ctx, async () => {
     const session = await agent.start(ctx);
     try {
-      for (let i = 0; i < (profile.maxTurns ?? 10); i++) {
+      const fixed = profile.input !== undefined ? (typeof profile.input === "string" ? profile.input : JSON.stringify(profile.input, null, 2)) : undefined;
+      for (let i = 0; i < (fixed !== undefined ? 1 : (profile.maxTurns ?? 10)); i++) {
         let next: { message: string; done: boolean };
         try {
-          next = await nextUserMessage(agent, profile, turns, userModel);
+          next = fixed !== undefined ? { message: fixed, done: true } : await nextUserMessage(agent, profile, turns, userModel);
         } catch (e) {
           ended = "user-error";
           error = `simulated user failed: ${(e as Error).message}`;

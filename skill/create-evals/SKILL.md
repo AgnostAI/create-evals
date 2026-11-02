@@ -51,9 +51,15 @@ Never change the agent's source to make it testable without asking the developer
 - `now`: an ISO time the clock starts at. Use it when the agent's behavior depends on dates.
 - `concurrency`: set to 1 if conversations would share state.
 
-**Agents that aren't chats** (classifiers, triage, extractors, pipelines: one input → one output) use the same loop. Each profile's `opening` is the input (e.g. a JSON payload) with `maxTurns: 1`. `send()` parses it, calls the function, records any intermediate calls, and returns the output as text (e.g. pretty JSON) for the reviewer to judge against the instructions. Write the inputs yourself: realistic, varied, and aimed at where the function must make a judgment.
+**Agents that aren't chats** (classifiers, triage, extractors, pipelines: one input → one output) use the same loop. Run `npx create-evals init --function`, and set `kind: "function"` plus an `example` input in the binding. Profiles are `{ "id": "...", "input": { ...any JSON... } }`, with no persona. `send()` receives the input as JSON text, calls the function, records anything in between (model calls, which model answered), and returns the output as text for the reviewer. Write the inputs yourself: realistic, varied, and aimed at where the function must make a judgment. `npx create-evals list` shows all inputs and outputs side by side, which is where rates and outliers show up.
 
 **Agents in another language** (Python, Go…): the binding is still TypeScript. `start()` spawns the agent as a subprocess (or calls it over a local HTTP endpoint the binding starts, with `"localhost"` in `allowHosts`), and `send()` passes the message through. The network guard only covers the Node process, so point the child at fakes or test credentials through its environment, and say in the report what isn't guarded.
+
+**Awkward shapes:**
+- *Only reachable through a CLI or server* (nothing exported, or the module starts a loop on import): `start()` spawns it as a child process and talks to it over stdin/stdout or HTTP. That's still the real agent.
+- *Replies that are UI* (cards, forms, buttons): `send()` returns what the user would *see*, as text (e.g. "[flight card: SFO→JFK, 11:00 PM local]"). A form the user fills in becomes a message the simulated user can send.
+- *A different model than production* (no key for it, or swapping on purpose): point it at the model you have through env or a replaced model module, and say so in the report. Failures that depend on the model need re-checking on the production one.
+- *Your project isn't ESM:* that's fine; `create-evals` can be imported or required.
 
 Then:
 
@@ -106,6 +112,8 @@ Then do what the tools can't: **read**. Open at least the traces behind each fai
 - Look for what the reviewer can't see: failures caused by the instructions themselves (the agent obeys and the user still hits a dead end), and patterns that only show across many conversations.
 - Fix your fakes if *they* misbehaved, and re-run.
 - If the reviewer missed something you can see, note it yourself.
+
+Traces from setup mistakes or broken fakes shouldn't count: remove them with `npx create-evals drop <trace-id…>`. Start a clean round with `npx create-evals reset` (it archives the old one). When you regroup, new failure modes are marked `[new]`.
 
 **If you found little, the profiles were too easy.** Write a harder round aimed at what earlier runs never touched (tools never called, rules never tested, longer conversations, users who push back). Run, review and group again. Two or three rounds is normal. Stop when a new round finds nothing new.
 
@@ -160,7 +168,7 @@ scenario(agent, "never disowns a booking it made", {
 - Every test also fails on empty replies, agent errors and blocked network calls, without you writing anything. Use `allow: ["repeated-reply"]` to tolerate a specific check.
 - **A test must fail on today's agent before it counts.** Run `npx create-evals test --only "<name>"`. If it passes, sharpen the persona or the check until it reproduces the failure. A test that can't reproduce the bug proves nothing.
 - Use `runs: 2` or 3. New tests are tier `"usually"` (reported, not blocking). Promote a test to `tier: "always"` (blocks CI) once it has passed reliably after the fix.
-- Optionally add a passing test for important behavior the agent gets right, so it stays right.
+- **Guard tests.** Rules that only the prompt enforces can hold today and break with the next prompt or model change. For the important ones, write a test even though it passes now. Then prove it has teeth: in a scratch copy of the repo, delete that rule from the prompt and run the test. It should fail. If it still passes, the test doesn't guard the rule; sharpen it.
 
 Add `"evals": "create-evals test"` to package.json scripts.
 
@@ -176,13 +184,16 @@ Tell the developer:
 
 | Command | What it does |
 |---|---|
-| `create-evals init` | Scaffold `evals/agent.ts` and `evals/create-evals.json` |
+| `create-evals init [--function]` | Scaffold `evals/agent.ts` (chat or function) and `evals/create-evals.json` |
 | `create-evals check` | One short conversation; verifies the setup |
 | `create-evals run [--profiles f] [--only a,b] [--repeat n]` | Conversations → `.create-evals/traces/` |
 | `create-evals review [--all] [--model m]` | Notes per trace (problems with quoted evidence) |
 | `create-evals group [--model m]` | Failure modes → `.create-evals/failures.json` |
-| `create-evals show <trace-id>` | A conversation with its events, end state and review |
+| `create-evals show <trace-id> [--full]` | A conversation with its events, end state and review |
+| `create-evals drop <trace-id…>` | Delete traces that shouldn't count |
+| `create-evals reset` | Archive this round's traces and failures; start fresh |
 | `create-evals test [files] [--runs n] [--tier always] [--only text]` | Run `evals/*.eval.ts` |
+| `create-evals list` | Every run on one screen: input, outcome, output, problems |
 | `create-evals status` | Counts of traces, reviews and failure modes |
 
 **Models.** Simulated users, the reviewer and grouping default to `claude-sonnet-5-5`. Override them with `--model`, `--user-model`, the config's `models`, or `CREATE_EVALS_{USER,REVIEW,GROUP,JUDGE}_MODEL`. OpenAI models work with `OPENAI_API_KEY`.

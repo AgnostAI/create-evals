@@ -73,3 +73,15 @@ describe("render", () => {
     expect(render(t)).toBe(`USER: book it\n    [state] created {"id":1}\nAGENT (turn 0): done\n\nEND STATE:\n{"bookings":1}`);
   });
 });
+
+describe("function agents", () => {
+  it("send the profile's input once, as JSON, without calling the simulated user", async () => {
+    const m = fakeModel([]);
+    restore = m.restore;
+    const fn = defineAgent({ name: "fn", description: "", kind: "function", start: () => ({ send: async (msg) => JSON.stringify({ got: JSON.parse(msg).n * 2 }) }) });
+    const t = await converse(fn, { id: "f", input: { n: 21 } });
+    expect(t.turns.map((x) => x.text)).toEqual([JSON.stringify({ n: 21 }, null, 2), '{"got":42}']);
+    expect(t.ended).toBe("user-done");
+    expect(m.calls).toHaveLength(0);
+  });
+});

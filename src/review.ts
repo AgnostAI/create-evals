@@ -64,7 +64,7 @@ export async function review(trace: Trace, ctx: { description: string; instructi
     messages: [
       {
         role: "user",
-        content: `THE AGENT: ${ctx.description}\n\nITS INSTRUCTIONS:\n${ctx.instructions || "(none provided)"}\n\nTHE CONVERSATION (the user was simulated; its persona: ${trace.profile.persona})\n\n${transcript}`,
+        content: `THE AGENT: ${ctx.description}\n\nITS INSTRUCTIONS:\n${ctx.instructions || "(none provided)"}\n\n${trace.profile.input !== undefined ? "ONE RUN (USER is the input, AGENT is the output)" : `THE CONVERSATION (the user was simulated; its persona: ${trace.profile.persona})`}\n\n${transcript}`,
       },
     ],
     schema: REVIEW_SCHEMA,
