@@ -34,15 +34,16 @@ See [architecture.md](architecture.md) for the components and [concepts.md](conc
 - [x] Test written from it fails on the buggy agent, passes on the fixed one
 
 ### M3: The skill
-- [ ] SKILL.md drives the full loop; AGENTS.md generated from it
-- [ ] A fresh subagent, given only the skill, sets up and runs the loop on the booking agent
+- [x] SKILL.md drives the full loop; AGENTS.md generated from it
+- [x] A fresh subagent, given only the skill, sets up and runs the loop on the booking agent
 
 ### M4: Generalize
-- [ ] Agnost `e2e-demo` (Nimo, raw OpenAI-style SDK on Claude): finds the refund dead-end unaided
-- [ ] Agnost `ayurved` LLM functions (non-conversational path)
-- [ ] fixtures/support-agent
+- [x] Agnost `e2e-demo` (Nimo, raw OpenAI-style SDK on Claude): finds the refund dead-end unaided (the coding agent did; the reviewer missed it until it learned that instructions can be the bug)
+- [ ] Non-conversational path (fixtures/triage-agent; opening = input, maxTurns 1)
+- [ ] A Python agent (Agnost enterprise-outbound research agents, subprocess binding)
+- [x] fixtures/support-agent
 - [ ] 2–3 public agents from GitHub (sandboxed: `--ignore-scripts`, network guard)
-- [ ] Model comparison: reviewer on Haiku / Sonnet / Opus; simulated user on Haiku / Sonnet
+- [x] Model comparison: reviewer on Haiku / Sonnet / Opus (agent on Haiku vs Sonnet in the Nimo run)
 
 ### M5: Ship quality
 - [ ] README, docs (concepts, architecture, binding guide, CLI + API reference)
@@ -55,3 +56,10 @@ See [architecture.md](architecture.md) for the components and [concepts.md](conc
 - **Group by root cause.** Grouping by symptom split one bug into 4 modes; prompting for shared causes merged them correctly.
 - **Reviewer models** (same 13 traces): Sonnet and Opus both found the main bug with little noise; Haiku found it too but invented a 6-conversation mode ("offers times without looking them up") because the binding recorded the calendar's operations but not the agent's own tool calls. Default stays Sonnet; bindings must record the agent's tool calls, not just backend changes.
 - **Basic checks catch real things.** On the fixed agent, the payment-link test failed on `repeated-reply`: the model's content filter fires on that request and the agent's fallback line repeats.
+- **Fresh agents, given only the skill, found real bugs on three agents** (each ran ~25–40 conversations, about 25 minutes):
+  - *Booking agent (buggy commit):* the lost-history bug (8/15 conversations), plus a bug nobody had found: `find_open_times` ignores the per-day cap that booking enforces, so it offers times on full days and then refuses them. The reviewer missed that one; the coding agent found it by reading traces.
+  - *Support-agent fixture:* the same lost-history class (the agent disowns real refunds and redoes them; one run paid $300 on a $150 request), PII shared with unverified callers, and refund splitting to dodge approval. 6 of 7 tests fail on today's agent.
+  - *Nimo (Agnost e2e-demo):* the known refund dead end (10/10 billing conversations), and replies cut off by a 300-token cap (empty on Sonnet).
+- **Lost tool history is common.** Two of three real agents returned only text from their chat function, so the model can't see what it did on earlier turns.
+- **The reviewer needs a human-like reader on top.** Its high-severity notes were accurate. About half its low ones were wrong or trivial, and it missed failures the instructions themselves cause. The skill now makes the coding agent read traces, and the reviewer prompt asks for precision and treats instructions as a possible bug.
+- **Simulated-user refusals happen** on impostor personas. Fixed with authorized-testing framing and server-side fallback, and runs where the simulator fails are skipped rather than failed.

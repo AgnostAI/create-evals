@@ -51,6 +51,10 @@ Never change the agent's source to make it testable without asking the developer
 - `now`: an ISO time the clock starts at. Use it when the agent's behavior depends on dates.
 - `concurrency`: set to 1 if conversations would share state.
 
+**Agents that aren't chats** (classifiers, triage, extractors, pipelines: one input → one output) use the same loop. Each profile's `opening` is the input (e.g. a JSON payload) with `maxTurns: 1`. `send()` parses it, calls the function, records any intermediate calls, and returns the output as text (e.g. pretty JSON) for the reviewer to judge against the instructions. Write the inputs yourself: realistic, varied, and aimed at where the function must make a judgment.
+
+**Agents in another language** (Python, Go…): the binding is still TypeScript. `start()` spawns the agent as a subprocess (or calls it over a local HTTP endpoint the binding starts, with `"localhost"` in `allowHosts`), and `send()` passes the message through. The network guard only covers the Node process, so point the child at fakes or test credentials through its environment, and say in the report what isn't guarded.
+
 Then:
 
 ```bash
