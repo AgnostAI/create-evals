@@ -2,7 +2,7 @@
 
 A real meeting-booking agent. Guests chat with it on a web page. It checks your Google Calendar, offers open times in their time zone, and books the meeting with a Google Meet link. Google emails the invite to the guest.
 
-We use it to develop and compare eval workflows (create-evals, Braintrust) on an agent that does real work.
+It's also the reference example for create-evals: see [evals/](evals) for its binding, its in-memory calendar, and 14 tests, and [evals/evals.md](evals/evals.md) for what they check.
 
 - **Stack:** TypeScript, Vercel AI SDK, Claude (`claude-opus-5-5`), Google Calendar REST API, Node 26 (`Temporal` for time zones)
 - **No mocks:** availability comes from your calendar's free/busy, and bookings are real events
@@ -46,6 +46,7 @@ Google may warn that the app isn't verified. That's expected for your own client
 npm start               # http://localhost:3000, the page guests use
 npm run chat            # the same agent in the terminal
 npm test                # unit tests for the slot math
+npm run evals           # create-evals scenario tests (real model calls)
 ```
 
 To let other people use it, host it anywhere that runs Node 26 (Fly, Render, Railway, a VPS) with the same `.env`. Set `PUBLIC_URL` so invites tell guests where to reschedule. For a quick share from your machine, a tunnel works too (`cloudflared tunnel --url http://localhost:3000`).
