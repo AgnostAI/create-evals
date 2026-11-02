@@ -23,12 +23,18 @@ export interface Model {
 
 export class ModelError extends Error {}
 
-export const DEFAULT_MODELS = {
-  user: process.env.CREATE_EVALS_USER_MODEL ?? "claude-sonnet-5-5",
-  review: process.env.CREATE_EVALS_REVIEW_MODEL ?? "claude-sonnet-5-5",
-  group: process.env.CREATE_EVALS_GROUP_MODEL ?? "claude-sonnet-5-5",
-  judge: process.env.CREATE_EVALS_JUDGE_MODEL ?? "claude-sonnet-5-5",
-};
+/** Read at call time, so .env, config `env` and config `models` (applied by prepare()) take effect. */
+export const DEFAULT_MODELS = () => ({
+  user: process.env.CREATE_EVALS_USER_MODEL || "claude-sonnet-5-5",
+  review: process.env.CREATE_EVALS_REVIEW_MODEL || "claude-sonnet-5-5",
+  group: process.env.CREATE_EVALS_GROUP_MODEL || "claude-sonnet-5-5",
+  judge: process.env.CREATE_EVALS_JUDGE_MODEL || "claude-sonnet-5-5",
+});
+
+/** The env var holding the key a model needs. */
+export function keyFor(modelId: string): string {
+  return provider(modelId).name === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+}
 
 /** Hosts create-evals itself talks to; the network guard always allows them. */
 export const MODEL_HOSTS = ["api.anthropic.com", "api.openai.com"];
@@ -41,8 +47,22 @@ function provider(model: string): { name: "anthropic" | "openai"; id: string } {
 
 async function post(url: string, headers: Record<string, string>, body: unknown): Promise<any> {
   for (let attempt = 0; ; attempt++) {
-    const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
-    if (res.ok) return res.json();
+    let res: Response;
+    try {
+      res = await fetch(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body), signal: AbortSignal.timeout(300_000) });
+    } catch (e) {
+      // Network errors and timeouts: retry, then report as a model failure (tests skip rather than fail).
+      if (attempt >= 4) throw new ModelError(`${url}: ${(e as Error).message}`);
+      await new Promise((r) => setTimeout(r, 2000 * 2 ** attempt));
+      continue;
+    }
+    if (res.ok) {
+      try {
+        return await res.json();
+      } catch (e) {
+        throw new ModelError(`${url} returned a malformed body: ${(e as Error).message}`);
+      }
+    }
     const text = await res.text();
     const retryable = res.status === 429 || res.status === 529 || res.status >= 500;
     if (!retryable || attempt >= 4) throw new ModelError(`${url} → ${res.status}: ${text.slice(0, 400)}`);
@@ -72,7 +92,12 @@ export const model: Model = {
       );
       const choice = res.choices?.[0];
       if (choice?.message?.refusal) throw new ModelError(`${req.model} refused: ${choice.message.refusal}`);
-      return JSON.parse(choice?.message?.content ?? "null") as T;
+      if (!choice?.message?.content) throw new ModelError(`${req.model} returned no content (finish_reason ${choice?.finish_reason}).`);
+      try {
+        return JSON.parse(choice.message.content) as T;
+      } catch {
+        throw new ModelError(`${req.model} returned non-JSON: ${choice.message.content.slice(0, 200)}`);
+      }
     }
     // Server-side fallback: if the model declines (playing an adversarial user, reviewing a hostile
     // transcript), the API retries on a fallback model inside the same call. Not available on Haiku.

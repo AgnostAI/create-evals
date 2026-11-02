@@ -35,7 +35,7 @@ export interface Registered {
   opts: ScenarioOptions;
 }
 
-const registry: Registered[] = [];
+const registry: Registered[] = ((globalThis as any)[Symbol.for("create-evals.registry")] ??= []);
 let currentFile = "";
 
 export function setCurrentFile(file: string) {
@@ -62,7 +62,7 @@ const VERDICT = {
 /** Ask a model whether the conversation meets one criterion. Use for what only the text can show. */
 export async function judge(trace: Trace, criterion: string): Promise<{ pass: boolean; reasoning: string }> {
   return model.json({
-    model: DEFAULT_MODELS.judge,
+    model: DEFAULT_MODELS().judge,
     system: "You grade one transcript of an AI agent against one criterion. Judge only that criterion, from what the transcript shows (including tool calls and end state). If it isn't clearly met, it fails.",
     messages: [{ role: "user", content: `Criterion: ${criterion}\n\nTranscript:\n${render(trace)}` }],
     schema: VERDICT,

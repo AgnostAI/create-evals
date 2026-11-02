@@ -42,7 +42,7 @@ Run from the agent's repo root. Every command that runs the agent sets up the sa
 | `allowHosts` | Hosts the agent may reach besides the model APIs (`api.anthropic.com` and `api.openai.com` are always allowed). `*.domain` matches subdomains. Add `localhost` for local sandboxes. Anything else throws and is recorded as a `network-blocked` event. |
 | `env` | Set before the agent loads. Wins over the shell and over `.env` (also loaded if present). `"${OTHER}"` inserts another variable, e.g. `"OPENAI_API_KEY": "${ANTHROPIC_API_KEY}"`. |
 | `concurrency` | Conversations at once for `run` and `test`. Default 4. |
-| `models` | `user`, `review`, `group`, `judge`. Default `claude-sonnet-5-5` for all. Env overrides: `CREATE_EVALS_USER_MODEL`, `CREATE_EVALS_REVIEW_MODEL`, `CREATE_EVALS_GROUP_MODEL`, `CREATE_EVALS_JUDGE_MODEL`. |
+| `models` | `user`, `review`, `group`, `judge`. Default `claude-sonnet-5-5` for all. The `CREATE_EVALS_{USER,REVIEW,GROUP,JUDGE}_MODEL` env vars win over this; `--model` and `--user-model` win over both. |
 
 Model ids: `claude-…` or `anthropic:…` use `ANTHROPIC_API_KEY`; `gpt-…`, `o…` or `openai:…` use `OPENAI_API_KEY`.
 

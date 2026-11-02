@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, w
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AgentDefinition } from "./agent.js";
-import { DEFAULT_MODELS } from "./llm.js";
+import { DEFAULT_MODELS, keyFor } from "./llm.js";
 import { CONFIG_PATH, DIR, loadAgent, loadConfig, prepare, readInstructions, type Config } from "./project.js";
 import { group, review } from "./review.js";
 import { converse, converseAll } from "./run.js";
@@ -42,15 +42,34 @@ interface Flags {
   [k: string]: string | boolean | string[];
 }
 
+const BOOLEAN_FLAGS = ["all", "help", "version", "full", "function"];
+
 function parse(argv: string[]): Flags {
   const f: Flags = { _: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
-    if (!a.startsWith("--")) f._.push(a);
-    else if (["--all", "--help", "--version", "--full", "--function"].includes(a)) f[a.slice(2)] = true;
-    else f[a.slice(2)] = argv[++i] ?? "";
+    if (a === "-h") f.help = true;
+    else if (!a.startsWith("--")) f._.push(a);
+    else {
+      const [name, inline] = a.slice(2).split(/=(.*)/s) as [string, string | undefined];
+      if (BOOLEAN_FLAGS.includes(name)) f[name] = true;
+      else f[name] = inline ?? argv[++i] ?? "";
+    }
   }
   return f;
+}
+
+/** A positive integer flag, or the fallback. Anything else is a usage error. */
+function count(f: Flags, name: string, fallback: number): number {
+  if (f[name] === undefined) return fallback;
+  const n = Number(f[name]);
+  if (!Number.isInteger(n) || n < 1) fail(`--${name} must be a positive whole number, got "${f[name]}"`);
+  return n;
+}
+
+function requireKey(modelId: string) {
+  const name = keyFor(modelId);
+  if (!process.env[name]) fail(`${name} isn't set (needed for ${modelId}). Set it in your shell or .env.`);
 }
 
 const root = process.cwd();
@@ -80,8 +99,24 @@ function saveTrace(t: Trace, kind: "runs" | "tests" | "checks" = "runs") {
 function allTraces(kinds: ("runs" | "tests" | "checks")[] = ["runs"]): Trace[] {
   return kinds
     .flatMap((k) => (existsSync(tracesDir(k)) ? readdirSync(tracesDir(k)).filter((f) => f.endsWith(".json")).map((f) => path.join(tracesDir(k), f)) : []))
-    .map((f) => JSON.parse(readFileSync(f, "utf8")) as Trace)
-    .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+    .flatMap((f) => {
+      try {
+        return [JSON.parse(readFileSync(f, "utf8")) as Trace];
+      } catch {
+        console.log(yellow(`! skipping unreadable trace ${path.relative(root, f)}`));
+        return [];
+      }
+    })
+    .sort((a, b) => (a.startedAt ?? "").localeCompare(b.startedAt ?? ""));
+}
+
+function findTrace(id: string, kinds: ("runs" | "tests" | "checks")[] = ["runs", "tests", "checks"]): Trace | undefined {
+  const all = allTraces(kinds);
+  const exact = all.find((x) => x.id === id);
+  if (exact) return exact;
+  const matches = all.filter((x) => x.id.startsWith(id));
+  if (matches.length > 1) fail(`"${id}" matches ${matches.length} traces (${matches.slice(0, 3).map((x) => x.id).join(", ")}…). Use more of the id.`);
+  return matches[0];
 }
 
 async function setup(): Promise<{ config: Config; agent: AgentDefinition }> {
@@ -189,8 +224,9 @@ async function cmdCheck() {
         persona: `You're trying this agent for the first time. ${agent.example !== undefined ? `Open with exactly: "${agent.example}".` : "Ask one realistic, simple question it's meant to handle."} Then ask one follow-up that depends on its previous answer. Then stop.`,
         maxTurns: 2,
       };
+  if (!fn) requireKey(DEFAULT_MODELS().user);
   console.log(dim(`Running one short conversation with ${agent.name}…`));
-  const t = await converse(agent, profile, { userModel: DEFAULT_MODELS.user });
+  const t = await converse(agent, profile, { userModel: DEFAULT_MODELS().user });
   saveTrace(t, "checks");
   console.log(render(t));
   console.log();
@@ -213,19 +249,21 @@ async function cmdCheck() {
 
 async function cmdRun(f: Flags) {
   const { config, agent } = await setup();
-  const file = path.join(root, (f.profiles as string) || path.join(DIR, "profiles.json"));
+  const file = path.resolve(root, (f.profiles as string) || path.join(DIR, "profiles.json"));
   let profiles = readJson<{ profiles: Profile[] }>(file).profiles;
   if (f.only) {
     const only = String(f.only).split(",");
     profiles = profiles.filter((p) => only.includes(p.id));
   }
-  const repeat = Number(f.repeat ?? 1);
+  const repeat = count(f, "repeat", 1);
   const queue = profiles.flatMap((p) => Array.from({ length: repeat }, () => p));
   if (!queue.length) fail("No profiles to run.");
+  const userModel = (f["user-model"] as string) || DEFAULT_MODELS().user;
+  if (queue.some((p) => p.input === undefined)) requireKey(userModel);
   console.log(dim(`Running ${queue.length} conversation(s) with ${agent.name}…`));
   const traces = await converseAll(agent, queue, {
-    concurrency: Number(f.concurrency ?? config.concurrency ?? 4),
-    userModel: (f["user-model"] as string) || config.models?.user || DEFAULT_MODELS.user,
+    concurrency: count(f, "concurrency", config.concurrency ?? 4),
+    userModel,
     onDone: (t) => {
       saveTrace(t);
       console.log(line(t));
@@ -233,11 +271,13 @@ async function cmdRun(f: Flags) {
   });
   const flagged = traces.filter((t) => t.checks.length || t.ended === "agent-error").length;
   console.log(`\n${traces.length} traces saved to ${DIR}/traces/${flagged ? `, ${yellow(`${flagged} with basic-check findings`)}` : ""}. Next: create-evals review`);
+  if (traces.every((t) => t.ended === "user-error" || t.ended === "agent-error")) fail("Every conversation failed before it got going. Check the errors above (create-evals show <id>).");
 }
 
 async function cmdReview(f: Flags) {
   const { config, agent } = await setup();
-  const modelId = (f.model as string) || config.models?.review || DEFAULT_MODELS.review;
+  const modelId = (f.model as string) || DEFAULT_MODELS().review;
+  requireKey(modelId);
   // A conversation the simulated user never got going has nothing to review.
   const todo = allTraces().filter((t) => (f.all || !t.review) && !(t.ended === "user-error" && t.turns.length < 2));
   if (!todo.length) return console.log("Nothing to review. Run `create-evals run` first, or pass --all.");
@@ -262,12 +302,15 @@ async function cmdReview(f: Flags) {
       }
     }),
   );
-  console.log(`\n${withProblems}/${todo.length} conversations had problems. Next: create-evals group`);
+  const reviewed = todo.filter((t) => t.review).length;
+  console.log(`\n${withProblems}/${reviewed} reviewed conversations had problems${reviewed < todo.length ? red(`; ${todo.length - reviewed} reviews failed`) : ""}. Next: create-evals group`);
+  if (!reviewed) process.exit(1);
 }
 
 async function cmdGroup(f: Flags) {
   const { config, agent } = await setup();
-  const modelId = (f.model as string) || config.models?.group || DEFAULT_MODELS.group;
+  const modelId = (f.model as string) || DEFAULT_MODELS().group;
+  requireKey(modelId);
   const traces = allTraces();
   const reviewed = traces.filter((t) => t.review);
   if (!reviewed.length) fail("No reviewed traces. Run `create-evals review` first.");
@@ -294,7 +337,7 @@ function printMode(m: FailureMode, total: number) {
 function cmdShow(f: Flags) {
   const id = f._[1];
   if (!id) fail("Usage: create-evals show <trace-id>");
-  const t = allTraces(["runs", "tests", "checks"]).find((x) => x.id === id || x.id.startsWith(id));
+  const t = findTrace(id);
   if (!t) fail(`No trace ${id}`);
   console.log(bold(`${t.id}`) + dim(`  persona: ${(t.profile.persona ?? JSON.stringify(t.profile.input) ?? "").slice(0, 200)}`));
   console.log(render(t, { clip: f.full ? 100_000 : 240 }));
@@ -329,7 +372,7 @@ function cmdDrop(f: Flags) {
   const ids = f._.slice(1);
   if (!ids.length) fail("Usage: create-evals drop <trace-id…>");
   for (const id of ids) {
-    const t = allTraces(["runs", "tests", "checks"]).find((x) => x.id === id || x.id.startsWith(id));
+    const t = findTrace(id);
     if (!t) {
       console.log(yellow(`! no trace ${id}`));
       continue;
@@ -362,24 +405,27 @@ function cmdStatus() {
 
 async function cmdTest(f: Flags) {
   const { config } = await setup();
-  const files = f._.length > 1 ? f._.slice(1) : existsSync(path.join(root, "evals")) ? readdirSync(path.join(root, "evals")).filter((x) => /\.eval\.[cm]?[jt]s$/.test(x)).map((x) => `evals/${x}`) : [];
+  const files = f._.length > 1 ? f._.slice(1).map((x) => path.resolve(root, x)) : existsSync(path.join(root, "evals")) ? readdirSync(path.join(root, "evals")).filter((x) => /\.eval\.[cm]?[jt]s$/.test(x)).map((x) => path.join(root, "evals", x)) : [];
   if (!files.length) fail("No evals/*.eval.ts files.");
   for (const file of files) {
-    setCurrentFile(file);
-    await import(pathToFileURL(path.join(root, file)).href);
+    setCurrentFile(path.relative(root, file));
+    await import(pathToFileURL(file).href);
   }
   let tests = registered();
   if (f.tier) tests = tests.filter((t) => (t.opts.tier ?? "usually") === f.tier);
   if (f.only) tests = tests.filter((t) => t.name.includes(String(f.only)));
-  const runsOverride = f.runs ? Number(f.runs) : process.env.CREATE_EVALS_RUNS ? Number(process.env.CREATE_EVALS_RUNS) : undefined;
-  const userModel = (f["user-model"] as string) || config.models?.user || DEFAULT_MODELS.user;
+  if (f.tier && !["always", "usually"].includes(String(f.tier))) fail(`--tier must be "always" or "usually", got "${f.tier}"`);
+  if (!tests.length) fail(`No tests selected${f.only || f.tier ? " (check --only / --tier)" : ""}.`);
+  const runsOverride = f.runs !== undefined ? count(f, "runs", 1) : process.env.CREATE_EVALS_RUNS ? Number(process.env.CREATE_EVALS_RUNS) : undefined;
+  const userModel = (f["user-model"] as string) || DEFAULT_MODELS().user;
+  if (tests.some((t) => t.opts.profile.input === undefined)) requireKey(userModel);
   console.log(dim(`Running ${tests.length} test(s)…`));
 
   const jobs = tests.flatMap((t) => Array.from({ length: runsOverride ?? t.opts.runs ?? 1 }, (_, i) => ({ t, i })));
   const results = new Map<Registered, { pass: number; skipped: number; fails: { reason: string; trace: string }[] }>();
   const queue = [...jobs];
   await Promise.all(
-    Array.from({ length: Number(f.concurrency ?? config.concurrency ?? 4) }, async () => {
+    Array.from({ length: count(f, "concurrency", config.concurrency ?? 4) }, async () => {
       for (let job = queue.shift(); job; job = queue.shift()) {
         const { t } = job;
         const r = results.get(t) ?? { pass: 0, skipped: 0, fails: [] };
@@ -418,24 +464,24 @@ async function cmdTest(f: Flags) {
     }),
   );
 
-  let blocking = 0;
-  for (const t of tests) {
-    const r = results.get(t)!;
+  // A test passes when enough counted runs pass for its tier. No counted runs (all skipped) is a failure.
+  const verdict = (t: Registered) => {
+    const r = results.get(t) ?? { pass: 0, skipped: 0, fails: [] };
     const runs = r.pass + r.fails.length;
     const tier = t.opts.tier ?? "usually";
-    const need = t.opts.atLeast ?? (tier === "always" ? runs : Math.ceil((runs * 2) / 3));
-    const ok = r.pass >= need;
+    const need = Math.min(t.opts.atLeast ?? (tier === "always" ? runs : Math.ceil((runs * 2) / 3)), runs);
+    return { r, runs, tier, ok: runs > 0 && r.pass >= need };
+  };
+  let blocking = 0;
+  for (const t of tests) {
+    const { r, runs, tier, ok } = verdict(t);
     if (!ok && tier === "always") blocking++;
     const mark = ok ? green("✔") : tier === "always" ? red("✖") : yellow("~");
     const skipped = r.skipped ? `, ${r.skipped} skipped (simulated user or judge failed)` : "";
     console.log(`${mark} ${t.name} ${dim(`(${r.pass}/${runs}${skipped}, ${tier}, ${t.file})`)}`);
     for (const fl of r.fails.slice(0, 2)) console.log(dim(`${fl.reason.replace(/^/gm, "    ")}\n    → create-evals show ${fl.trace}`));
   }
-  const failing = tests.filter((t) => {
-    const r = results.get(t)!;
-    const runs = r.pass + r.fails.length;
-    return r.pass < (t.opts.atLeast ?? ((t.opts.tier ?? "usually") === "always" ? runs : Math.ceil((runs * 2) / 3)));
-  }).length;
+  const failing = tests.filter((t) => !verdict(t).ok).length;
   console.log(`\n${tests.length - failing}/${tests.length} passing${failing ? `, ${failing} failing (${blocking} blocking: tier "always")` : ""}`);
   // Only "always" tests block (CI). "usually" failures are reported but don't fail the run.
   if (blocking) process.exit(1);

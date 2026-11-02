@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { group, review } from "../src/review.js";
+import { grounded, group, review } from "../src/review.js";
 import { fakeModel } from "./helpers.js";
 
 let restore = () => {};
@@ -50,5 +50,33 @@ describe("group", () => {
     restore = m.restore;
     const modes = await group(traces, "agent", "claude-test");
     expect(modes.map((x) => [x.id, x.traces])).toEqual([["big", ["b", "c"]], ["small", ["a"]]]);
+  });
+});
+
+describe("evidence grounding", () => {
+  const transcript = `USER: book Tuesday
+    [tool] book_meeting result → {"ok":false,"reason":"Slot \\"Tue 15:00\\" is full.\\nTry another."}
+AGENT (turn 0): You're all set – it's booked for Tuesday at 3 PM.`;
+  it("finds quotes from escaped JSON tool output and across punctuation styles", () => {
+    expect(grounded('Slot "Tue 15:00" is full. Try another.', transcript)).toBe(true);
+    expect(grounded('"ok": false', transcript)).toBe(true);
+    expect(grounded("You're all set - it's booked", transcript)).toBe(true);
+    expect(grounded("all set … booked for Tuesday", transcript)).toBe(true);
+  });
+  it("rejects quotes that aren't there, out of order, or too short to mean anything", () => {
+    expect(grounded("booked for Wednesday", transcript)).toBe(false);
+    expect(grounded("booked for Tuesday … You're all set", transcript)).toBe(false);
+    expect(grounded(" ", transcript)).toBe(false);
+    expect(grounded("booked", transcript)).toBe(false);
+  });
+});
+
+describe("group note ids", () => {
+  it("parses ids the model decorates, and keeps notes it left out", async () => {
+    const traces: any[] = ["a", "b", "c"].map((id) => ({ id, review: { problems: [{ turn: 0, what: `w-${id}`, evidence: "e", severity: "high" }] } }));
+    const m = fakeModel([{ modes: [{ id: "x", title: "X", should: "s", severity: "high", notes: ["n0 (a, turn 0)", "n1"] }] }]);
+    restore = m.restore;
+    const modes = await group(traces, "agent", "claude-test");
+    expect(modes.map((x) => [x.id, x.traces])).toEqual([["x", ["a", "b"]], ["ungrouped", ["c"]]]);
   });
 });

@@ -8,7 +8,7 @@ export async function initialize(data: { map: Record<string, string> }) {
 
 export async function resolve(specifier: string, context: any, next: (s: string, c: any) => Promise<{ url: string }>) {
   const result = await next(specifier, context);
-  const replacement = map[result.url];
+  const replacement = map[result.url.replace(/[?#].*$/, "")];
   // The fake itself may import the real module (to reuse types or helpers): let it.
   if (replacement && context.parentURL !== replacement) return { ...result, url: replacement, shortCircuit: true };
   return result;

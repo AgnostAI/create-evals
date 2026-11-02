@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { register } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -41,7 +41,9 @@ export async function prepare(root: string, config: Config) {
   const envFile = path.join(root, ".env");
   if (existsSync(envFile)) process.loadEnvFile(envFile);
   // "${OTHER_VAR}" in a value is replaced with that variable, e.g. "OPENAI_API_KEY": "${ANTHROPIC_API_KEY}".
-  for (const [k, v] of Object.entries(config.env ?? {})) process.env[k] = v.replace(/\$\{(\w+)\}/g, (_, name) => process.env[name] ?? "");
+  for (const [k, v] of Object.entries(config.env ?? {})) process.env[k] = String(v).replace(/\$\{(\w+)\}/g, (_, name) => process.env[name] ?? "");
+  const models = config.models ?? {};
+  for (const [role, id] of Object.entries(models)) if (id) process.env[`CREATE_EVALS_${role.toUpperCase()}_MODEL`] ??= id;
   guardNetwork(config.allowHosts);
   if (config.now) shiftClock(config.now);
 
@@ -50,7 +52,8 @@ export async function prepare(root: string, config: Config) {
   const map: Record<string, string> = {};
   for (const [real, fake] of Object.entries(config.replace ?? {})) {
     for (const p of [real, fake]) if (!existsSync(path.join(root, p))) throw new Error(`${CONFIG_PATH}: "replace" points at ${p}, which doesn't exist.`);
-    map[pathToFileURL(path.join(root, real)).href] = pathToFileURL(path.join(root, fake)).href;
+    // Real paths on both sides: imports resolve through symlinks (monorepos, pnpm), so the keys must too.
+    map[pathToFileURL(realpathSync(path.join(root, real))).href] = pathToFileURL(realpathSync(path.join(root, fake))).href;
   }
   if (Object.keys(map).length) {
     const here = new URL(".", import.meta.url);

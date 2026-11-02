@@ -12,7 +12,7 @@ export interface RunOptions {
 
 /** One conversation: the real agent against a simulated user, recording everything that happened. */
 export async function converse(agent: AgentDefinition, profile: Profile, opts: RunOptions = {}): Promise<Trace> {
-  const userModel = opts.userModel ?? DEFAULT_MODELS.user;
+  const userModel = opts.userModel ?? DEFAULT_MODELS().user;
   const turns: Turn[] = [];
   const events: TraceEvent[] = [];
   let agentTurn = 0;
@@ -28,7 +28,14 @@ export async function converse(agent: AgentDefinition, profile: Profile, opts: R
   let state: unknown;
 
   await runInContext(ctx, async () => {
-    const session = await agent.start(ctx);
+    let session;
+    try {
+      session = await agent.start(ctx);
+    } catch (e) {
+      ended = "agent-error";
+      error = `start() failed: ${(e as Error).stack?.split("\n").slice(0, 4).join("\n") ?? String(e)}`;
+      return;
+    }
     try {
       const fixed = profile.input !== undefined ? (typeof profile.input === "string" ? profile.input : JSON.stringify(profile.input, null, 2)) : undefined;
       for (let i = 0; i < (fixed !== undefined ? 1 : (profile.maxTurns ?? 10)); i++) {
@@ -60,9 +67,17 @@ export async function converse(agent: AgentDefinition, profile: Profile, opts: R
           break;
         }
       }
-      state = await session.state?.();
+      try {
+        state = await session.state?.();
+      } catch (e) {
+        events.push({ turn: agentTurn, kind: "error", name: "state() failed", input: (e as Error).message });
+      }
     } finally {
-      await session.close?.();
+      try {
+        await session.close?.();
+      } catch {
+        // closing is best effort
+      }
     }
   });
 

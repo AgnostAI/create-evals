@@ -10,7 +10,8 @@ export interface Context {
   state: Record<string, any>;
 }
 
-const storage = new AsyncLocalStorage<Context>();
+// Shared through globalThis so two copies of create-evals (say, npx plus a local install) agree.
+const storage: AsyncLocalStorage<Context> = ((globalThis as any)[Symbol.for("create-evals.context")] ??= new AsyncLocalStorage<Context>());
 
 export function runInContext<T>(ctx: Context, fn: () => Promise<T>): Promise<T> {
   return storage.run(ctx, fn);

@@ -53,7 +53,29 @@ Rules:
 - If the simulated USER misbehaved, list it under simulator_issues; don't blame the agent for what the user caused.
 - An empty problems list is the right answer when the agent did well.`;
 
-const norm = (s: string) => s.toLowerCase().replace(/[\s"'`“”‘’*_]+/g, " ").trim();
+/** Lowercase letters and digits only: quotes survive JSON escaping, punctuation and dash/quote styles. */
+const norm = (s: string) =>
+  s
+    .replace(/\\[nrt]/g, " ")
+    .replace(/\\(["'\\/])/g, "$1")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+/** Evidence counts if it's substantial and every part of it (split at ellipses) appears in order. */
+export function grounded(evidence: string, transcript: string): boolean {
+  const hay = norm(transcript);
+  const parts = evidence.split(/…|\.\.\.|\[\.\.\.\]/).map(norm).filter(Boolean);
+  if (!parts.length || parts.join(" ").length < 8) return false;
+  let from = 0;
+  for (const p of parts) {
+    const at = hay.indexOf(p, from);
+    if (at < 0) return false;
+    from = at + p.length;
+  }
+  return true;
+}
 
 /** Review one trace. Problems whose quoted evidence isn't in the transcript are dropped. */
 export async function review(trace: Trace, ctx: { description: string; instructions: string }, modelId: string): Promise<Review> {
@@ -69,9 +91,8 @@ export async function review(trace: Trace, ctx: { description: string; instructi
     ],
     schema: REVIEW_SCHEMA,
   });
-  const haystack = norm(transcript);
-  const grounded = out.problems.filter((p) => p.evidence && haystack.includes(norm(p.evidence)));
-  return { model: modelId, problems: grounded, simulatorIssues: out.simulator_issues, summary: out.summary };
+  const kept = out.problems.filter((p) => p.evidence && grounded(p.evidence, transcript));
+  return { model: modelId, problems: kept, simulatorIssues: out.simulator_issues, summary: out.summary };
 }
 
 const GROUP_SCHEMA = {
@@ -113,9 +134,22 @@ export async function group(traces: Trace[], description: string, modelId: strin
     messages: [{ role: "user", content: listing }],
     schema: GROUP_SCHEMA,
   });
-  return out.modes
+  const used = new Set<number>();
+  const index = (id: string) => {
+    const m = /^\s*n(\d+)\b/i.exec(id);
+    return m ? Number(m[1]) : -1;
+  };
+  const modes = out.modes.map((m) => {
+    const ids = m.notes.map(index).filter((i) => i >= 0 && i < notes.length && !used.has(i));
+    ids.forEach((i) => used.add(i));
+    return { ...m, ids };
+  });
+  // Notes the model left out still count: keep them visible rather than dropping them.
+  const leftover = notes.map((_, i) => i).filter((i) => !used.has(i));
+  if (leftover.length) modes.push({ id: "ungrouped", title: "Ungrouped notes", should: "Read these individually.", severity: "low", notes: [], ids: leftover });
+  return modes
     .map((m) => {
-      const picked = m.notes.map((id) => notes[Number(id.replace(/\D/g, ""))]).filter(Boolean) as typeof notes;
+      const picked = m.ids.map((i) => notes[i]!);
       return {
         id: m.id,
         title: m.title,
