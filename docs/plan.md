@@ -39,16 +39,22 @@ See [architecture.md](architecture.md) for the components and [concepts.md](conc
 
 ### M4: Generalize
 - [x] Agnost `e2e-demo` (Nimo, raw OpenAI-style SDK on Claude): finds the refund dead-end unaided (the coding agent did; the reviewer missed it until it learned that instructions can be the bug)
-- [ ] Non-conversational path (fixtures/triage-agent; opening = input, maxTurns 1)
-- [ ] A Python agent (Agnost enterprise-outbound research agents, subprocess binding)
+- [x] Non-conversational path (fixtures/triage-agent; opening = input, maxTurns 1)
+- [x] A Python agent (Agnost enterprise-outbound research agents, subprocess binding)
 - [x] fixtures/support-agent
-- [ ] 2–3 public agents from GitHub (sandboxed: `--ignore-scripts`, network guard)
+- [x] 2–3 public agents from GitHub (sandboxed: `--ignore-scripts`, network guard)
 - [x] Model comparison: reviewer on Haiku / Sonnet / Opus (agent on Haiku vs Sonnet in the Nimo run)
 
 ### M5: Ship quality
-- [ ] README, docs (concepts, architecture, binding guide, CLI + API reference)
-- [ ] Example in `examples/booking-agent`
-- [ ] CI workflow for this repo; `npm pack` clean; no publish without the maintainer
+- [x] README, docs (concepts, architecture, binding guide, CLI + API reference)
+- [x] Example in `examples/booking-agent`
+- [x] CI workflow for this repo; `npm pack` clean; no publish without the maintainer
+
+### Next
+- [ ] LangGraph.js agent (untested so far)
+- [ ] Production-trace import into `review`, for teams that already log conversations
+- [ ] `create-evals mutate`: plant bugs (delete a prompt rule, break a guard) and score whether the tests catch them; the guard-test check in the skill is the manual version today
+- [ ] Publish 1.0.0-alpha to npm (maintainer, with 2FA)
 
 ## Findings
 

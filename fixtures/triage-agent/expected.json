@@ -1,5 +1,5 @@
 {
-  "$comment": "Risks planted on purpose. The scanner must find them at these exact lines. The reply-length rule is enforced in code and must NOT be flagged.",
+  "$comment": "Problems planted on purpose. Used to check whether the create-evals loop finds them without being told (see docs/validation.md). Keep this file away from the agent under test.",
   "framework": "anthropic-sdk",
   "planted": [
     {
