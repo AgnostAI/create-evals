@@ -28,8 +28,9 @@ export interface Config {
 export const DIR = ".create-evals";
 export const CONFIG_PATH = "evals/create-evals.json";
 
-export function loadConfig(root: string): Config {
-  const file = path.join(root, CONFIG_PATH);
+export function loadConfig(root: string, configPath = CONFIG_PATH): Config {
+  const file = path.resolve(root, configPath);
+  if (configPath !== CONFIG_PATH && !existsSync(file)) throw new Error(`--config ${configPath} not found`);
   if (!existsSync(file)) return {};
   return JSON.parse(readFileSync(file, "utf8")) as Config;
 }

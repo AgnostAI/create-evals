@@ -34,7 +34,7 @@ const HELP = `${bold("create-evals")} ${VERSION}: find your agent's real failure
   create-evals list                 every run in one table: input, outcome, output, problems
   create-evals status               what's been run, reviewed and grouped
 
-Options: --model <id> (review/group), --user-model <id>, --concurrency <n>
+Options: --config <file> (default ${CONFIG_PATH}), --model <id> (review/group), --user-model <id>, --concurrency <n>
 Docs: https://github.com/AgnostAI/create-evals`;
 
 interface Flags {
@@ -119,8 +119,10 @@ function findTrace(id: string, kinds: ("runs" | "tests" | "checks")[] = ["runs",
   return matches[0];
 }
 
+let configPath: string | undefined;
+
 async function setup(): Promise<{ config: Config; agent: AgentDefinition }> {
-  const config = loadConfig(root);
+  const config = loadConfig(root, configPath);
   await prepare(root, config);
   const agent = await loadAgent(root, config);
   return { config, agent };
@@ -234,7 +236,7 @@ async function cmdCheck(f: Flags) {
   const agentTurns = t.turns.filter((x) => x.role === "agent");
   if (t.ended === "agent-error") problems.push(`The agent threw: ${t.error}`);
   if (!fn && agentTurns.length < 2 && t.ended !== "agent-error") problems.push("The conversation ended before a second turn.");
-  if (agentTurns.some((x) => !x.text.trim())) problems.push("An agent reply was empty: does send() return the reply text?");
+  if (t.ended !== "agent-error" && agentTurns.some((x) => !x.text.trim())) problems.push("An agent reply was empty: does send() return the reply text?");
   if (blocked.length) problems.push(`Blocked network calls to: ${[...new Set(blocked)].join(", ")}. Fake them (evals/create-evals.json "replace") or allow them.`);
   const notes: string[] = [];
   if (!t.events.length) notes.push("No events were recorded. If the agent used tools, record them with ctx.record() so reviews can check said-vs-did.");
@@ -492,6 +494,7 @@ async function cmdTest(f: Flags) {
 async function main() {
   const f = parse(process.argv.slice(2));
   if (f.version) return console.log(VERSION);
+  if (typeof f.config === "string") configPath = f.config;
   const cmd = f._[0];
   if (!cmd || f.help) return console.log(HELP);
   if (cmd === "init") return cmdInit(f);

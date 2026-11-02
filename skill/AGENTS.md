@@ -22,7 +22,7 @@ Work in the repo root. create-evals reads `evals/create-evals.json` and `evals/a
 npx create-evals init
 ```
 
-This writes `evals/agent.ts` (the binding) and `evals/create-evals.json` (the config). Read the agent's code first: find the entry point production uses (the route handler, CLI, or worker), how it keeps conversation history, every tool, and what each tool touches outside the process.
+This writes `evals/agent.ts` (the binding) and `evals/create-evals.json` (the config). Install dependencies with the repo's own package manager (pnpm, yarn or npm, whichever lockfile it has), so you run the versions production runs. Read the agent's code first: find the entry point production uses (the route handler, CLI, or worker), how it keeps conversation history, every tool, and what each tool touches outside the process.
 
 **The binding** (`evals/agent.ts`) exports `defineAgent({ name, description, instructions, start })`:
 - `description`: what the agent does and who talks to it. Simulated users and the reviewer read this.
@@ -39,7 +39,7 @@ This writes `evals/agent.ts` (the binding) and `evals/create-evals.json` (the co
 3. Otherwise, write a small in-memory fake of the developer's own integration module, with the same exports, and swap it in: `"replace": { "src/google.ts": "evals/fake-google.ts" }`. The fake keeps state on `current().state`, records each change, and should behave like the real service (errors included). Never fake modules inside `node_modules`.
 4. Last resort: wrap the tool's `execute` in the binding. Then the tool's own code isn't tested, so say so in the report.
 
-Never change the agent's source to make it testable without asking the developer.
+Never change the agent's source to make it testable without asking the developer. If a bug blocks everything after it (a crash on every turn), you can apply the one-line fix in an eval-only overlay config (`npx create-evals run --config evals/overlay.json`, with `replace` pointing at a patched copy) to explore further, and report the fix as finding #1.
 
 **The config** (`evals/create-evals.json`):
 - `replace`: modules to swap for fakes.
@@ -83,6 +83,7 @@ The child reads `{"message", "profile"}` JSON lines and answers each with `@@CRE
 - *Vercel AI SDK:* `result.response.messages` holds only the last step. Production history (and yours, if production keeps it) needs `result.steps.flatMap(s => s.response.messages)`. Record tool calls from each step's `content`: failed calls show up there as `tool-error` parts, not in `toolResults`.
 - *Mastra:* give each conversation a fresh memory thread (a new `threadId`/`resource` per `start()`), so conversations don't leak into each other. Memory's message window (`lastMessages`) is production behavior; don't raise it for evals. A hard-coded model string can be overridden on the agent instance; say so in the report.
 - *OpenAI Agents SDK:* carry `result.history` into the next `run()` if production does. Tool calls are in `result.newItems`.
+- *LangGraph:* use a fresh `thread_id` per conversation (and a fresh store, if the graph keeps one), and keep the checkpointer production uses. When the graph pauses with `interrupt()`, the next `send()` resumes it with `new Command({ resume: message })`. Tool calls made inside subagents or tools don't show up in the top-level messages; record them with a callback handler (`handleToolStart`/`handleToolEnd`) passed in the run config.
 
 Then:
 

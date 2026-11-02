@@ -2,7 +2,7 @@
 
 ## CLI
 
-Run from the agent's repo root. Every command that runs the agent sets up the sandbox first (see [config](#config)).
+Run from the agent's repo root. Every command that runs the agent sets up the sandbox first (see [config](#config)). Every command takes `--config <file>` to use a different config, e.g. an eval-only overlay.
 
 | Command | Does |
 |---|---|
