@@ -11,3 +11,4 @@ examples/*/node_modules/
 .create-evals/
 examples/*/.create-evals/
 *.tgz
+test/fixtures/*/node_modules

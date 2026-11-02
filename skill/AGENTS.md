@@ -29,7 +29,7 @@ This writes `evals/agent.ts` (the binding) and `evals/create-evals.json` (the co
 - `instructions`: repo-relative paths to the system prompt and policy files (or literal text), so the reviewer can judge the agent against its own rules.
 - `start(ctx)`: starts one conversation. It builds fresh state, and returns `{ send(message) → reply text, state() → end state }`.
   - **`send` must call the agent the way production does, and keep history the way production does.** If production keeps tool calls between turns, keep them; if it keeps only text, keep only text. A different history is a different agent, and history bugs are among the most common real failures.
-  - `ctx.record({ kind: "tool" | "state", name, input, output })` logs tool calls and state changes, so the reviewer can check what the agent *said* against what it *did*. Record the agent's tool calls (e.g. from the model's response parts) and every change your fakes make.
+  - `ctx.record({ kind: "tool" | "state", name, input, output })` logs what happened, so the reviewer can check what the agent *said* against what it *did*. Record **both** the agent's own tool calls with their results (e.g. from the model's response parts) **and** every change your fakes make. With only one of them, reviewers misjudge: they can't tell whether the agent looked something up.
   - `state()` returns plain data describing what the agent changed: records, sent messages, files.
   - Per-conversation data goes on `ctx.state`. Code running inside the conversation (including fakes) reads it with `current()` from `create-evals`.
 
