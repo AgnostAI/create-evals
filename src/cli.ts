@@ -12,7 +12,7 @@ import { registered, setCurrentFile, type Registered } from "./scenario.js";
 import { render } from "./trace.js";
 import type { FailureMode, Profile, Trace } from "./types.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.1";
 const tty = process.stdout.isTTY;
 const c = (code: number) => (s: string) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
 const [bold, dim, red, green, yellow] = [c(1), c(2), c(31), c(32), c(33)];
