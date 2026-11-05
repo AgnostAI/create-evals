@@ -54,7 +54,7 @@ See [architecture.md](architecture.md) for the components and [concepts.md](conc
 - [x] LangGraph.js agent (langgraph-101-ts: six real failures)
 - [ ] Production-trace import into `review`, for teams that already log conversations
 - [ ] `create-evals mutate`: plant bugs (delete a prompt rule, break a guard) and score whether the tests catch them; the guard-test check in the skill is the manual version today
-- [ ] Publish 1.0.0-alpha to npm (maintainer, with 2FA)
+- [x] Published create-evals@0.1.0 to npm (2026-11-05)
 
 ## Findings
 
