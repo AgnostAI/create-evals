@@ -12,7 +12,7 @@ import { registered, setCurrentFile, type Registered } from "./scenario.js";
 import { render } from "./trace.js";
 import type { FailureMode, Profile, Trace } from "./types.js";
 
-const VERSION = "0.1.2";
+const VERSION = "0.1.3";
 const tty = process.stdout.isTTY;
 const c = (code: number) => (s: string) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
 const [bold, dim, red, green, yellow] = [c(1), c(2), c(31), c(32), c(33)];
@@ -532,18 +532,25 @@ async function cmdTest(f: Flags) {
     const need = Math.min(t.opts.atLeast ?? (tier === "always" ? runs : Math.ceil((runs * 2) / 3)), runs);
     return { r, runs, tier, ok: runs > 0 && r.pass >= need };
   };
+  // The same list the developer answered: one line per eval, ✔ or ✖, and one short reason when it fails.
   let blocking = 0;
+  const failed: Registered[] = [];
   for (const t of tests) {
     const { r, runs, tier, ok } = verdict(t);
+    if (!ok) failed.push(t);
     if (!ok && tier === "always") blocking++;
-    const mark = ok ? green("✔") : tier === "always" ? red("✖") : yellow("~");
-    const skipped = r.skipped ? `, ${r.skipped} skipped (simulated user or judge failed)` : "";
-    console.log(`${mark} ${t.name} ${dim(`(${r.pass}/${runs}${skipped}, ${tier}, ${t.file})`)}`);
-    for (const fl of r.fails.slice(0, 2)) console.log(dim(`${fl.reason.replace(/^/gm, "    ")}\n    → create-evals show ${fl.trace}`));
+    const mark = ok ? green("✔") : red("✖");
+    const partial = runs > 1 && r.pass > 0 && r.pass < runs ? dim(` (passed ${r.pass} of ${runs} runs)`) : "";
+    const skipped = r.skipped ? dim(` (${r.skipped} run(s) skipped: the simulated user or judge failed)`) : "";
+    console.log(`${mark} ${t.name}${partial}${skipped}${tier === "always" ? dim(" [always]") : ""}`);
+    if (!ok && r.fails[0]) {
+      const why = r.fails[0].reason.split("\n").map((l) => l.trim()).filter(Boolean)[0] ?? "";
+      console.log(dim(`    ${why.length > 160 ? `${why.slice(0, 159)}…` : why}   (create-evals show ${r.fails[0].trace})`));
+    }
   }
-  const failing = tests.filter((t) => !verdict(t).ok).length;
-  console.log(`\n${tests.length - failing}/${tests.length} passing${failing ? `, ${failing} failing (${blocking} blocking: tier "always")` : ""}`);
-  // Only "always" tests block (CI). "usually" failures are reported but don't fail the run.
+  const pass = tests.length - failed.length;
+  console.log(`\n${bold(`${pass} of ${tests.length} pass.`)}${failed.length ? ` ${failed.length} fail: ask your coding agent to fix the agent until they pass, then run this again.` : ""}`);
+  // Only "always" evals fail the process (for CI); the rest are reported.
   if (blocking) process.exit(1);
 }
 

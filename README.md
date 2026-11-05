@@ -30,8 +30,8 @@ None of these shows up in single-message tests. The first appears on turn three,
 2. **Simulated users.** A model plays realistic people with goals, details, and a temperament: patient, vague, pushy, changing their mind. The profiles are written from your agent's code, not from a generic list.
 3. **Review.** A model reads every conversation, including each tool call and the end state, and notes where the agent went wrong. Every note must quote the transcript. It checks what the agent *said* against what it *did*.
 4. **Group.** Notes become failure modes, grouped by root cause and ranked by how often they happen.
-5. **You decide the judgment calls.** Clear bugs are just reported. Where the right behavior is your call, you get a plain question with a real example and two or three options.
-6. **Tests.** Each bug becomes a scenario test that has to fail on today's agent before it counts. `npx create-evals test` runs them, with repeats and tiers, so flaky model behavior doesn't block your CI.
+5. **About 10 cases, yes or no.** You see one line per case, with what your agent did today: "Podium: US lead, LinkedIn says United States. Should it qualify? today: no". Your answers are the evals.
+6. **Done.** "10 evals created. Today 6 pass and 4 fail. Next: ask your coding agent to fix the 4 failing evals." `npx create-evals test` reruns them anytime.
 
 ## Get started
 
@@ -48,9 +48,9 @@ Then open your coding agent there (Claude Code, Codex, Cursor) and run:
 ```
 
 Then:
-- It reads your agent, runs it against simulated users, and reads every conversation.
-- It shows you what went wrong, with real excerpts, and asks which ones are bugs.
-- It writes a test for each bug.
+- It reads your agent, runs it on many realistic cases, and reads what happened. This takes 20–30 minutes.
+- It shows you about 10 cases, one line each, and asks: should this happen? You reply like `1y 2n 3y`.
+- It writes those 10 evals and tells you how many fail today. Those are your bugs, ready for your coding agent to fix.
 
 Afterwards, you run:
 

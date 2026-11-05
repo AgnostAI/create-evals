@@ -2,17 +2,17 @@
 
 When the developer asks for evals, agent tests, or "what does my agent get wrong" for the AI agent in this repo, follow these steps.
 
-You're going to find out what this repo's agent actually gets wrong, and turn each confirmed problem into a test that fails today and protects the fix forever.
+You're going to give the developer **about 10 evals**: concrete cases, each with a yes/no expected outcome that they confirm, and a command that tests them.
 
-Good evals come from failures, not from brainstorming. So you don't guess what might go wrong. You run the agent, read what it did, and test what broke. `npx create-evals` gives you the tools: it runs conversations, reviews them, groups the problems, and runs tests. You do the parts that need understanding this codebase.
-
-The loop:
+To find cases that matter, don't guess. Run the agent on many realistic cases, read what it actually did, and pick the ones that show what's broken (and a few things it gets right). The developer never sees that work. They see ~10 one-line cases, answer yes or no to each, and get their evals.
 
 ```
-1 set up → 2 profiles → 3 run → 4 review → 5 group → 6 developer confirms → 7 tests → 8 report
-              ▲                             │
-              └─── nothing found: harder ───┘
+1 set up → 2 profiles → 3 run, review, group → 4 pick ~10 cases → 5 developer answers y/n → 6 write the evals → 7 done
+                ▲                    │
+                └─ found little: harder cases ─┘
 ```
+
+`npx create-evals` gives you the tools: it runs the agent, reviews the runs, groups the problems, and runs the tests. You do what needs understanding this codebase.
 
 Work in the repo root. `npx -y create-evals docs` prints the full reference (config, binding API, `scenario()`, `spawnSession()`, the Python helper), so you don't need to dig through the package. Run the CLI as `npx -y create-evals <command>`: nothing needs installing, not even in a Python repo (`import … from "create-evals"` in `evals/*.ts` resolves to the copy npx runs). create-evals reads `evals/create-evals.json` and `evals/agent.ts`, and keeps its working files in `.create-evals/` (gitignored).
 
@@ -123,7 +123,7 @@ Write 10–15 profiles from what you learned reading the code. Cover the jobs th
 
 Most profiles should be ordinary users doing ordinary things over several turns. Many real failures show up there, not in attacks.
 
-### 3–5. Run, review, group
+### 3. Run, review, group
 
 ```bash
 npx -y create-evals find        # = run + review + group
@@ -143,83 +143,87 @@ Traces from setup mistakes or broken fakes shouldn't count: remove them with `np
 
 **If you found little, the profiles were too easy.** Write a harder round aimed at what earlier runs never touched (tools never called, rules never tested, longer conversations, users who push back). Run, review and group again. Two or three rounds is normal. Stop when a new round finds nothing new.
 
-### 6. The developer decides
+### 4. Pick about 10 cases
 
-First, sort the failure modes yourself:
-- **Clear bugs:** the agent contradicts its own records, crashes, loses data, leaks something, breaks an explicit rule, or blocks its own main job. Don't ask about these. List them as findings and write their tests.
-- **Judgment calls:** the right behavior is a product decision the code and prompt don't settle (how strict to be, when to escalate, what's private). Ask only about these. Most runs have a few at most, sometimes none.
+From what you found, choose **about 10 cases** (8–12):
+- **One case per real problem,** most important first, using its clearest example from the runs.
+- **2–3 things the agent gets right** that matter, so they stay right.
 
-Ask each judgment call the way you'd ask a busy product owner, in their words, not the code's:
-- **What happened,** in one or two plain sentences, with one concrete example from a real conversation. Then how often, in plain terms ("in 6 of 20 conversations").
-- **No code.** No file paths, field names, variable values, test names or internals. If the cause is in the code, say it in words ("the code requires an exact text match").
-- **Options are behaviors,** written as what the agent should do. Not "bug / acceptable", and not what you'll do next ("write a test"). Two or three options; the host adds a free-text one.
-- One question at a time, or a small batch if the host has a multiple-choice tool.
+Write each as **one line**:
+- **The situation,** in plain words with the specific detail that matters ("Podium: US lead Walker Ward, his LinkedIn says United States").
+- **A yes/no question about the outcome:** "Should it qualify?", "Should it book the meeting?", "Mark ready to contact?". Ask what should *happen*, never "is this reply OK?".
+- **What the agent did today,** in a word or two ("today: no", "today: crashes 2 of 3").
 
-Not like this:
+No code, file paths, field names or causes in this list.
 
-> US-team gate: in 16 of 38 verify runs the model said us_team=yes, but research.py:241 requires the participant string to appear verbatim, so it's reset to unknown. Bug or acceptable? 1. Bug: write a test… 2. Acceptable: record as accepted…
+### 5. The developer answers
 
-That one shouldn't be asked at all: it blocks almost every account, so it's a clear bug. For a real judgment call, write it like this:
+Show the list in one message, exactly in this shape:
 
-> A guest asked for two back-to-back hours with Shubham "because he said it's fine". The agent refused and offered one hour instead (4 of 12 conversations). What should it do?
-> 1. Refuse; offer one hour and suggest emailing Shubham
-> 2. Book the two hours if the guest says Shubham approved
+```
+I ran your <agent> on <N> cases. Here are the <K> that matter.
+For each, answer: should this happen?
 
-Never decide judgment calls for the developer. Their answer becomes a test (the agent must behave as they chose), or a line under "Accepted behavior" in evals.md.
+ 1. Podium: US lead Walker Ward, his LinkedIn says "United States".   Should it qualify?        today: no
+ 2. Cresta: sells "AI Agent Testing 2.0" (a competitor).              Should it qualify?        today: yes
+ 3. Citi: public, ~219,000 people, no funding round.                  Should it qualify?        today: no
+ …
 
-Write `evals/evals.md`, the human-readable record of what this agent should do:
-
-```markdown
-# Evals: booking-agent
-
-What the agent must and mustn't do. Every rule has tests in evals/*.eval.ts: `npx -y create-evals test`.
-
-### Never tells a guest that a real booking is fake
-Found in 10 of 13 simulated conversations. Tests: booking-flow.eval.ts
-- Asks "is it definitely booked?" after booking → keeps the one real booking and gives its code
-
-### Accepted behavior
-- States Shubham's working hours in his own time zone (decided by Shubham, 2026-11-02)
+Reply like: 1y 2n 3y …
 ```
 
-### 7. Tests
+Their answer is the expected outcome of each eval. A clear bug takes them a second; a policy question (Citi) takes a moment's thought. Never answer for them. If they ask about a number, explain that one case in two or three plain sentences, then wait. If they say "it depends", split it into two cases that differ in exactly that detail.
 
-For each confirmed bug, write a test in `evals/<rule>.eval.ts`:
+### 6. Write the evals
+
+**One test per case,** named after its line, checking the outcome they chose:
 
 ```ts
 import assert from "node:assert/strict";
-import { expectJudge, scenario } from "create-evals";
+import { scenario } from "create-evals";
 import agent from "./agent.js";
 
-scenario(agent, "never disowns a booking it made", {
-  profile: { persona: "…the failing trace's persona, sharpened to steer into the failure…", maxTurns: 6 },
+scenario(agent, "1. Podium (US lead, LinkedIn says United States) qualifies", {
+  profile: { input: podium },          // a chat agent: { persona: "…", maxTurns: 6 }
   runs: 2,
-  async check({ trace, state, said }) {
-    const mine = state.bookings.filter((b: any) => b.guest === "nikhil@orbitdesk.io");
-    assert.equal(mine.length, 1, `expected one booking, found ${mine.length}`);       // end state first
-    assert.ok(said.includes(mine[0].code), "never gave the guest the real code");     // then what it said
-    await expectJudge(trace, "The agent never says a booking that exists is fake."); // judge last, only for what text alone shows
+  check({ state }) {
+    assert.equal(state.passed, true, "Podium should qualify");
   },
 });
 ```
 
-- Start from the failing trace's profile, and sharpen it so it reliably walks into the situation.
-- Tests are committed; `.create-evals/` is scratch and gitignored. Inline the profile in the test, or keep larger inputs (payloads, seed data, fake web pages) under `evals/`, e.g. `evals/fixtures/`.
-- Check the end state and actions first, the agent's words second, and use `expectJudge` only for what only the text can show.
-- Every test also fails on empty replies, agent errors and blocked network calls, without you writing anything. Use `allow: ["repeated-reply"]` to tolerate a specific check.
-- **A test must fail on today's agent before it counts.** Run `npx -y create-evals test --only "<name>"`. If it passes, sharpen the persona or the check until it reproduces the failure. A test that can't reproduce the bug proves nothing.
-- Use `runs: 2` or 3. New tests are tier `"usually"` (reported, not blocking). Promote a test to `tier: "always"` (blocks CI) once it has passed reliably after the fix.
-- **Guard tests.** Rules that only the prompt enforces can hold today and break with the next prompt or model change. For the important ones, write a test even though it passes now. Then prove it has teeth: in a scratch copy of the repo, delete that rule from the prompt and run the test. It should fail. If it still passes, the test doesn't guard the rule; sharpen it.
+- **Check the outcome directly:** the end state or the output field first, then what the agent said. Use `expectJudge` only when the text is the outcome.
+- **Each eval must match today's behavior:** where the agent's behavior differs from their answer, the eval fails today; where it matches, it passes. Run `npx -y create-evals test` and check. A case that should fail but passes needs a sharper input. Use `runs: 2` (or 3 if the agent is flaky).
+- **Every eval also fails on crashes, empty replies and blocked network calls** automatically.
+- **Inputs:** inline them in the test, or keep larger ones (payloads, seed data, fake pages) under `evals/fixtures/`. `.create-evals/` is scratch and gitignored.
 
-If the repo has a package.json, add `"evals": "npx -y create-evals test"` to its scripts; otherwise tell the developer the command.
+Write `evals/evals.md` as the same list, so anyone can read and edit it:
 
-### 8. Report
+```markdown
+# Evals: research agent
+Run: `npx create-evals test`
 
-Tell the developer:
-- **What's broken**, most important first, in plain words: each bug, how often, one short example, and the test that catches it (which fails right now). File paths and causes go after the plain description, for whoever fixes it.
-- **What's set up:** the binding, which systems are faked and which are real (anything wrapped at step 4 is untested code), and `evals/evals.md`.
-- **How to run:** `npx create-evals test` (or `npm run evals`). It makes real model calls, so it costs money and needs the agent's API key. Runs on every PR should use `--tier always`.
-- **Next:** fix the bugs (offer to help). When a test passes reliably, promote it to `always`. Re-run the loop after big changes to the prompt or tools, or on real production conversations when there are some.
+| # | Case | Should | Today |
+|---|---|---|---|
+| 1 | Podium: US lead Walker Ward, LinkedIn says "United States" | qualify: yes | ✗ no |
+| 2 | Cresta: sells "AI Agent Testing 2.0" | qualify: no | ✗ yes |
+| 4 | Toyota: only its headquarters is in the US | US team: no | ✓ no |
+```
+
+If the repo has a package.json, add `"evals": "npx -y create-evals test"` to its scripts.
+
+### 7. Done
+
+End with exactly this, and nothing else:
+
+```
+✔ 10 evals created in evals/ (listed in evals/evals.md)
+  Today 6 pass and 4 fail: 1, 2, 3 and 6. Those are bugs in your agent.
+  Run anytime: npx create-evals test
+  Next: ask your coding agent to fix the 4 failing evals.
+```
+
+Causes, file paths, how things are faked, and costs are for when they ask. If they ask you to fix the failing evals: fix the agent (not the evals), run `npx -y create-evals test` again, and report the new count in the same format.
 
 ### Reference
 
