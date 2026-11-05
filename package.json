@@ -37,7 +37,7 @@
   "homepage": "https://github.com/AgnostAI/create-evals",
   "repository": {
     "type": "git",
-    "url": "https://github.com/AgnostAI/create-evals.git"
+    "url": "git+https://github.com/AgnostAI/create-evals.git"
   },
   "license": "MIT",
   "dependencies": {
