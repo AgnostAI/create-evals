@@ -15,7 +15,7 @@ run → review → group → confirm → test → fix
 1. **Run.** Get real conversations. With production traffic, you'd use traces. Before launch you have none, so you manufacture them: the real agent against simulated users.
 2. **Review.** Read every conversation and note the first thing that went wrong, with evidence. Free text, not categories.
 3. **Group.** Notes collapse into a handful of failure modes, grouped by root cause and counted. They emerge from *this* agent's behavior, so nobody has to write a category list.
-4. **Confirm.** A person who knows what "right" looks like decides, per failure mode: bug, or acceptable? That's the only judgment a human has to make.
+4. **Confirm.** Clear bugs (the agent contradicts its own records, crashes, blocks its own job) are just reported. Where the right behavior is a product decision, a person who knows what "right" looks like picks it, from plain-language options. That's the only judgment a human has to make.
 5. **Test.** Each bug becomes a test that reproduces it. If it doesn't fail on today's agent, it isn't a test yet.
 6. **Fix,** and keep the test forever as a regression lock.
 

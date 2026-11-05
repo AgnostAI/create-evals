@@ -30,7 +30,7 @@ None of these shows up in single-message tests. The first appears on turn three,
 2. **Simulated users.** A model plays realistic people with goals, details, and a temperament: patient, vague, pushy, changing their mind. The profiles are written from your agent's code, not from a generic list.
 3. **Review.** A model reads every conversation, including each tool call and the end state, and notes where the agent went wrong. Every note must quote the transcript. It checks what the agent *said* against what it *did*.
 4. **Group.** Notes become failure modes, grouped by root cause and ranked by how often they happen.
-5. **You decide.** For each failure mode: bug, or acceptable? That's the only question you're asked.
+5. **You decide the judgment calls.** Clear bugs are just reported. Where the right behavior is your call, you get a plain question with a real example and two or three options.
 6. **Tests.** Each bug becomes a scenario test that has to fail on today's agent before it counts. `npx create-evals test` runs them, with repeats and tiers, so flaky model behavior doesn't block your CI.
 
 ## Get started

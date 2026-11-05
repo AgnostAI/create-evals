@@ -365,7 +365,7 @@ async function cmdGroup(f: Flags) {
   if (!modes.length) return console.log(green(`No problems found in ${reviewed.length} conversations. Make the profiles harder and run again.`));
   console.log(bold(`${modes.length} failure mode(s) across ${reviewed.length} reviewed conversations:\n`));
   for (const m of modes) printMode(m, reviewed.length);
-  console.log(dim(`Saved to ${DIR}/failures.json. Show the developer each mode with a transcript (create-evals show <trace>) and ask: bug, or acceptable?`));
+  console.log(dim(`Saved to ${DIR}/failures.json. Read the traces behind each mode (create-evals show <trace>). Report clear bugs; ask the developer only about judgment calls, in plain words.`));
 }
 
 function printMode(m: FailureMode, total: number) {

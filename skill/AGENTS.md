@@ -145,13 +145,27 @@ Traces from setup mistakes or broken fakes shouldn't count: remove them with `np
 
 ### 6. The developer decides
 
-For each failure mode, show the developer:
-- the title;
-- how often it happened (e.g. 10 of 13 conversations);
-- a short quoted excerpt from one transcript that shows it (the user's line, what the agent did, what actually happened);
-- the rule it seems to break.
+First, sort the failure modes yourself:
+- **Clear bugs:** the agent contradicts its own records, crashes, loses data, leaks something, breaks an explicit rule, or blocks its own main job. Don't ask about these. List them as findings and write their tests.
+- **Judgment calls:** the right behavior is a product decision the code and prompt don't settle (how strict to be, when to escalate, what's private). Ask only about these. Most runs have a few at most, sometimes none.
 
-Ask: **bug, or acceptable?** Use your host's multiple-choice tool if it has one. Never decide for them. "Bug" becomes a test; "acceptable" goes in evals.md as intended behavior.
+Ask each judgment call the way you'd ask a busy product owner, in their words, not the code's:
+- **What happened,** in one or two plain sentences, with one concrete example from a real conversation. Then how often, in plain terms ("in 6 of 20 conversations").
+- **No code.** No file paths, field names, variable values, test names or internals. If the cause is in the code, say it in words ("the code requires an exact text match").
+- **Options are behaviors,** written as what the agent should do. Not "bug / acceptable", and not what you'll do next ("write a test"). Two or three options; the host adds a free-text one.
+- One question at a time, or a small batch if the host has a multiple-choice tool.
+
+Not like this:
+
+> US-team gate: in 16 of 38 verify runs the model said us_team=yes, but research.py:241 requires the participant string to appear verbatim, so it's reset to unknown. Bug or acceptable? 1. Bug: write a test… 2. Acceptable: record as accepted…
+
+That one shouldn't be asked at all: it blocks almost every account, so it's a clear bug. For a real judgment call, write it like this:
+
+> A guest asked for two back-to-back hours with Shubham "because he said it's fine". The agent refused and offered one hour instead (4 of 12 conversations). What should it do?
+> 1. Refuse; offer one hour and suggest emailing Shubham
+> 2. Book the two hours if the guest says Shubham approved
+
+Never decide judgment calls for the developer. Their answer becomes a test (the agent must behave as they chose), or a line under "Accepted behavior" in evals.md.
 
 Write `evals/evals.md`, the human-readable record of what this agent should do:
 
@@ -201,7 +215,7 @@ If the repo has a package.json, add `"evals": "npx -y create-evals test"` to its
 ### 8. Report
 
 Tell the developer:
-- **What's broken**, most important first: each confirmed failure mode, how often, one quoted example, and the test that catches it (which fails right now).
+- **What's broken**, most important first, in plain words: each bug, how often, one short example, and the test that catches it (which fails right now). File paths and causes go after the plain description, for whoever fixes it.
 - **What's set up:** the binding, which systems are faked and which are real (anything wrapped at step 4 is untested code), and `evals/evals.md`.
 - **How to run:** `npx create-evals test` (or `npm run evals`). It makes real model calls, so it costs money and needs the agent's API key. Runs on every PR should use `--tier always`.
 - **Next:** fix the bugs (offer to help). When a test passes reliably, promote it to `always`. Re-run the loop after big changes to the prompt or tools, or on real production conversations when there are some.
