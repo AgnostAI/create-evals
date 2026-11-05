@@ -8,6 +8,7 @@ Run from the agent's repo root, as `npx create-evals <command>`. Nothing needs i
 |---|---|
 | `create-evals` (no arguments) | Installs the skill: `.claude/skills/create-evals/SKILL.md` (Claude Code) and a section in `AGENTS.md` (Codex, Cursor, others), then says what to do next. |
 | `create-evals find` | `run`, then `review`, then `group`: from profiles to "here's what's broken". |
+| `create-evals docs` | Prints this reference (bundled with the package). |
 | `create-evals init [--function]` | Writes `evals/agent.ts` (a chat binding, or a one-input function binding with `--function`) and `evals/create-evals.json`, and gitignores `.create-evals/`. Existing files are kept. |
 | `create-evals check [--message m]` | Runs one short conversation (2 turns, or exactly one message with `--message`) and prints it with every event. Fails on agent errors, empty replies and blocked requests. Warns when no events or end state were recorded. |
 | `create-evals run [--profiles file] [--only a,b] [--repeat n] [--concurrency n] [--user-model m]` | Runs simulated users from `.create-evals/profiles.json` and saves each trace to `.create-evals/traces/`. |
@@ -17,7 +18,7 @@ Run from the agent's repo root, as `npx create-evals <command>`. Nothing needs i
 | `create-evals drop <trace-id…>` | Deletes traces that shouldn't count (setup mistakes, broken fakes). |
 | `create-evals reset` | Moves the current traces and failures to `.create-evals/archive/<time>/`, for a fresh round. |
 | `create-evals test [files…] [--runs n] [--tier always\|usually] [--only text] [--concurrency n]` | Runs `evals/*.eval.ts` (or the given files). Exits 1 only when an `always` test fails. |
-| `create-evals list` | Every run trace on one screen: first input, last output, outcome, problems. |
+| `create-evals list [--json]` | Every run trace on one screen: first input, last output (or review summary), end state, outcome, problems. `--json` prints all of it for scripts and coding agents. |
 | `create-evals status` | Counts traces, reviews and failure modes. |
 
 ## Config

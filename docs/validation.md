@@ -36,3 +36,16 @@ On the same 13 booking conversations, all three reviewer models found the main b
 - The developer decisions were made by the agents, not by the owners of these agents.
 - Frequencies come from 15–40 simulated conversations per agent, which shows patterns, not rates you could put in a dashboard.
 - Several worlds (fake web pages, seeded calendars) were written by the agent doing the testing. A fake can be wrong, which is why the skill makes the coding agent read traces and drop findings caused by its own fakes.
+
+## Developer-experience run (real flow)
+
+On a fresh worktree of Agnost's `enterprise-outbound` (Python), we ran exactly what a developer would: `npx create-evals`, then Claude Code headless with `/create-evals`. It took 28 minutes and $3.55 of Claude Code usage, plus create-evals' own model calls.
+
+- **Results:** 7 bug tests that fail on today's code, and 22 guard tests that pass, one of them proved by deleting its rule. Its report led with the business impact: "Of six companies I wrote to clearly qualify, none passed verification in 21 runs."
+- **Questions for the developer** came out in plain language, with real examples and options written as behaviors. Clear bugs were reported, not asked.
+- **Friction it exposed (fixed in 0.1.2):**
+  - The agent wrote throwaway scripts to compare end states across runs (now `list` shows state, and `list --json`).
+  - It dug through the package's type files to learn the API (now `create-evals docs`).
+  - Nothing said where committed test inputs go (now the skill does).
+  - One crash counted as two findings.
+  - A top-level `evals/` folder can break `pip install -e .` in flat-layout Python repos (the skill now says how to exclude it).

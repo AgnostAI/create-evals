@@ -17,7 +17,7 @@ The loop:
               └─── nothing found: harder ───┘
 ```
 
-Work in the repo root. Run the CLI as `npx -y create-evals <command>`: nothing needs installing, not even in a Python repo (`import … from "create-evals"` in `evals/*.ts` resolves to the copy npx runs). create-evals reads `evals/create-evals.json` and `evals/agent.ts`, and keeps its working files in `.create-evals/` (gitignored).
+Work in the repo root. `npx -y create-evals docs` prints the full reference (config, binding API, `scenario()`, `spawnSession()`, the Python helper), so you don't need to dig through the package. Run the CLI as `npx -y create-evals <command>`: nothing needs installing, not even in a Python repo (`import … from "create-evals"` in `evals/*.ts` resolves to the copy npx runs). create-evals reads `evals/create-evals.json` and `evals/agent.ts`, and keeps its working files in `.create-evals/` (gitignored).
 
 ## 1. Set up: run the agent like production, safely
 
@@ -53,7 +53,7 @@ Never change the agent's source to make it testable without asking the developer
 
 **Agents that aren't chats** (classifiers, triage, extractors, pipelines: one input → one output) use the same loop. Run `npx -y create-evals init --function`, and set `kind: "function"` plus an `example` input in the binding. Profiles are `{ "id": "...", "input": { ...any JSON... } }`, with no persona. `send()` receives the input as JSON text, calls the function, records anything in between (model calls, which model answered), and returns the output as text for the reviewer. Write the inputs yourself: realistic, varied, and aimed at where the function must make a judgment. `npx -y create-evals list` shows all inputs and outputs side by side, which is where rates and outliers show up.
 
-**Agents in another language** (Python, Go…): the binding is still TypeScript, and the agent runs as a child process, one per conversation:
+**Agents in another language** (Python, Go…). In a Python repo, check `pyproject.toml` first: with setuptools' automatic package discovery (no explicit `packages`), a top-level `evals/` folder can break `pip install -e .` ("Multiple top-level packages discovered"). If so, tell the developer, and suggest excluding it (`[tool.setuptools.packages.find] exclude = ["evals*"]`) rather than renaming. The binding is still TypeScript, and the agent runs as a child process, one per conversation:
 
 ```ts
 // evals/agent.ts
@@ -136,7 +136,7 @@ npx -y create-evals review      # a model reads each new trace and notes what we
 npx -y create-evals group       # merges the notes into failure modes: .create-evals/failures.json
 ```
 
-Then do what the tools can't: **read**. Open at least the traces behind each failure mode with `npx -y create-evals show <trace-id>`, plus a few marked ok.
+Then do what the tools can't: **read**. `npx -y create-evals list` shows every run on one screen (with its end state); `list --json` gives you all of it to filter, so you don't need to write a script. Open at least the traces behind each failure mode with `npx -y create-evals show <trace-id>`, plus a few marked ok.
 - Drop notes that are wrong: the reviewer misread something, or the simulated user caused it.
 - Look for what the reviewer can't see: failures caused by the instructions themselves (the agent obeys and the user still hits a dead end), and patterns that only show across many conversations.
 - Fix your fakes if *they* misbehaved, and re-run.
@@ -207,6 +207,7 @@ scenario(agent, "never disowns a booking it made", {
 ```
 
 - Start from the failing trace's profile, and sharpen it so it reliably walks into the situation.
+- Tests are committed; `.create-evals/` is scratch and gitignored. Inline the profile in the test, or keep larger inputs (payloads, seed data, fake web pages) under `evals/`, e.g. `evals/fixtures/`.
 - Check the end state and actions first, the agent's words second, and use `expectJudge` only for what only the text can show.
 - Every test also fails on empty replies, agent errors and blocked network calls, without you writing anything. Use `allow: ["repeated-reply"]` to tolerate a specific check.
 - **A test must fail on today's agent before it counts.** Run `npx -y create-evals test --only "<name>"`. If it passes, sharpen the persona or the check until it reproduces the failure. A test that can't reproduce the bug proves nothing.

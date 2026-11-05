@@ -12,7 +12,7 @@ import { registered, setCurrentFile, type Registered } from "./scenario.js";
 import { render } from "./trace.js";
 import type { FailureMode, Profile, Trace } from "./types.js";
 
-const VERSION = "0.1.1";
+const VERSION = "0.1.2";
 const tty = process.stdout.isTTY;
 const c = (code: number) => (s: string) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
 const [bold, dim, red, green, yellow] = [c(1), c(2), c(31), c(32), c(33)];
@@ -32,7 +32,8 @@ ${bold("Building blocks")} (the skill uses these)
   run [--profiles f] [--only a,b] [--repeat n]
   review [--all]                    note what went wrong in each new trace
   group                             merge the notes into failure modes (${DIR}/failures.json)
-  list | show <id> [--full] | status
+  list [--json] | show <id> [--full] | status
+  docs                              the full reference: config, binding API, scenario(), spawnSession(), Python helper
   drop <id…> | reset                discard bad traces, or archive this round and start fresh
   test [files] [--runs n] [--tier always|usually] [--only text]
 
@@ -44,7 +45,7 @@ interface Flags {
   [k: string]: string | boolean | string[];
 }
 
-const BOOLEAN_FLAGS = ["all", "help", "version", "full", "function"];
+const BOOLEAN_FLAGS = ["all", "help", "version", "full", "function", "json"];
 
 function parse(argv: string[]): Flags {
   const f: Flags = { _: [] };
@@ -218,8 +219,8 @@ Now open your coding agent in this folder and say:
 
   ${bold("/create-evals")}   ${dim("(or: \"find what my agent gets wrong and write evals for it\")")}
 
-It runs your agent against simulated users, shows you what went wrong, asks which are bugs,
-and writes tests. Needs ANTHROPIC_API_KEY.`);
+It runs your agent against simulated users, shows you what went wrong, asks you about anything
+that's your call, and writes tests. Takes about 20–30 minutes. Needs ANTHROPIC_API_KEY.`);
 }
 
 /** run → review → group, for people: one command from "nothing" to "here's what's broken". */
@@ -392,8 +393,23 @@ function cmdShow(f: Flags) {
 }
 
 /** Every run trace on one screen, so patterns across runs (rates, outliers) are visible. */
-function cmdList() {
+function cmdList(f: Flags) {
   const traces = allTraces();
+  if (f.json) {
+    // For coding agents: everything needed to scan results across runs, without writing a script.
+    const rows = traces.map((t) => ({
+      id: t.id,
+      profile: t.profile.id,
+      ended: t.ended,
+      turns: t.turns.filter((x) => x.role === "agent").length,
+      checks: t.checks.map((c) => c.check),
+      problems: t.review?.problems.map((p) => `[${p.severity}] ${p.what}`) ?? null,
+      lastReply: [...t.turns].reverse().find((x) => x.role === "agent")?.text ?? "",
+      state: t.state ?? null,
+      error: t.error ?? null,
+    }));
+    return console.log(JSON.stringify(rows, null, 2));
+  }
   if (!traces.length) return console.log("No traces yet. Run `create-evals run`.");
   const one = (s: string, n: number) => {
     const flat = s.replace(/\s+/g, " ").trim();
@@ -407,8 +423,9 @@ function cmdList() {
     console.log(`${bold(t.id)}  ${dim(`${t.turns.filter((x) => x.role === "agent").length} turns, ${t.ended}`)}  ${probs}${t.checks.length ? yellow(`  ${t.checks.map((c) => c.check).join(",")}`) : ""}`);
     console.log(`  in:  ${one(first, 150)}`);
     console.log(`  ${t.profile.input !== undefined || !t.review ? "out" : "summary"}: ${one(last || "[empty]", 150)}`);
+    if (t.state !== undefined) console.log(dim(`  state: ${one(JSON.stringify(t.state), 150)}`));
   }
-  console.log(dim(`\n${traces.length} runs. Full detail: create-evals show <id>`));
+  console.log(dim(`\n${traces.length} runs. Full detail: create-evals show <id>. Everything as JSON: create-evals list --json`));
 }
 
 function cmdDrop(f: Flags) {
@@ -539,7 +556,8 @@ async function main() {
   if (!cmd || cmd === "setup") return cmdSetup();
   if (cmd === "find") return cmdFind(f);
   if (cmd === "init") return cmdInit(f);
-  if (cmd === "list") return cmdList();
+  if (cmd === "list") return cmdList(f);
+  if (cmd === "docs") return console.log(readFileSync(new URL("../docs/reference.md", import.meta.url), "utf8"));
   if (cmd === "check") return cmdCheck(f);
   if (cmd === "run") return cmdRun(f);
   if (cmd === "review") return cmdReview(f);

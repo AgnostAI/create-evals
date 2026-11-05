@@ -5,7 +5,8 @@ export function basicChecks(trace: Trace): CheckFinding[] {
   const out: CheckFinding[] = [];
   const agentTurns = trace.turns.filter((t) => t.role === "agent");
   agentTurns.forEach((t, turn) => {
-    if (!t.text.trim()) out.push({ check: "empty-reply", turn, detail: "The agent sent nothing back." });
+    const crashed = trace.ended === "agent-error" && turn === agentTurns.length - 1;
+    if (!t.text.trim() && !crashed) out.push({ check: "empty-reply", turn, detail: "The agent sent nothing back." });
     const prev = agentTurns[turn - 1];
     if (prev && prev.text.trim() && prev.text.trim() === t.text.trim()) out.push({ check: "repeated-reply", turn, detail: "The agent repeated its previous reply word for word." });
   });
