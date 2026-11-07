@@ -16,6 +16,8 @@ export interface Config {
   replace?: Record<string, string>;
   /** Hosts the agent may reach besides model APIs. "*.example.com" matches subdomains; add "localhost" for local sandboxes. */
   allowHosts?: string[];
+  /** Env files to load (repo-relative), e.g. "backend/.env". Default ".env" if present. Later files and the shell win over earlier ones. */
+  envFile?: string | string[];
   /** Env vars set before the agent loads (they win over .env and the shell). "${OTHER}" references another variable. */
   env?: Record<string, string>;
   /** Directory the agent runs in (repo-relative), for agents that open files relative to the working directory. */
@@ -42,8 +44,16 @@ let prepared = false;
 export async function prepare(root: string, config: Config) {
   if (prepared) return;
   prepared = true;
-  const envFile = path.join(root, ".env");
-  if (existsSync(envFile)) process.loadEnvFile(envFile);
+  // process.loadEnvFile never overwrites a variable that's already set, so the shell wins.
+  if (config.envFile === undefined) {
+    if (existsSync(path.join(root, ".env"))) process.loadEnvFile(path.join(root, ".env"));
+  } else {
+    for (const f of [config.envFile].flat().reverse()) {
+      const file = path.resolve(root, f);
+      if (!existsSync(file)) throw new Error(`${CONFIG_PATH}: "envFile" points at ${f}, which doesn't exist.`);
+      process.loadEnvFile(file);
+    }
+  }
   // "${OTHER_VAR}" in a value is replaced with that variable, e.g. "OPENAI_API_KEY": "${ANTHROPIC_API_KEY}".
   for (const [k, v] of Object.entries(config.env ?? {})) process.env[k] = String(v).replace(/\$\{(\w+)\}/g, (_, name) => process.env[name] ?? "");
   const models = config.models ?? {};
@@ -93,15 +103,30 @@ function resolveSelf() {
   });
 }
 
-export async function loadAgent(root: string, config: Config): Promise<AgentDefinition> {
+/** The binding's agents: one (`defineAgent`) or several (`defineAgents`, or an array). */
+export async function loadAgents(root: string, config: Config): Promise<AgentDefinition[]> {
   const file = path.join(root, config.agent ?? "evals/agent.ts");
   if (!existsSync(file)) throw new Error(`No ${path.relative(root, file)} yet. Run \`create-evals init\` and fill it in (see the skill).`);
   const mod = await import(pathToFileURL(file).href);
   // Without "type": "module", tsx compiles the binding as CommonJS and the default export sits one level deeper.
-  let agent = (mod.default ?? mod.agent) as any;
-  if (agent && !agent.start && agent.default?.start) agent = agent.default;
-  if (!agent?.start) throw new Error(`${path.relative(root, file)} must \`export default defineAgent({ ... })\`.`);
-  return agent;
+  let exp = (mod.default ?? mod.agent ?? mod.agents) as any;
+  if (exp && !exp.start && !Array.isArray(exp) && exp.default) exp = exp.default;
+  const list: any[] = Array.isArray(exp) ? exp : [exp];
+  if (!list.length || list.some((a) => typeof a?.start !== "function")) {
+    throw new Error(`${path.relative(root, file)} must \`export default defineAgent({ ... })\` (or \`defineAgents({ ... })\` for several).`);
+  }
+  return list;
+}
+
+/** Pick the agent a profile (or --agent) names. With one agent, that's the one. */
+export function pickAgent(agents: AgentDefinition[], name?: string): AgentDefinition {
+  if (name) {
+    const a = agents.find((x) => x.name === name);
+    if (!a) throw new Error(`No agent named "${name}". The binding defines: ${agents.map((x) => x.name).join(", ")}.`);
+    return a;
+  }
+  if (agents.length > 1) throw new Error(`The binding defines several agents (${agents.map((x) => x.name).join(", ")}): say which with "agent" in the profile, or --agent.`);
+  return agents[0]!;
 }
 
 /** The agent's instructions as text, for the reviewer: file contents (with their paths) or literal text. */

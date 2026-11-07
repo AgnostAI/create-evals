@@ -1,6 +1,8 @@
 /** A simulated user to run the agent against. */
 export interface Profile {
   id: string;
+  /** Which agent to run, when the binding defines several (`defineAgents`). */
+  agent?: string;
   /** Who the user is, what they want, how they behave, and what they know. Written for this agent. */
   persona?: string;
   /**
@@ -84,4 +86,6 @@ export interface FailureMode {
   traces: string[];
   /** One representative note per trace: "trace-id: what". */
   notes: string[];
+  /** "inconsistency": the same rule applied differently across agents or inputs. Its notes are the contradicting quotes. */
+  kind?: "failure" | "inconsistency";
 }

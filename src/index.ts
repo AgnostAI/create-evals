@@ -1,4 +1,4 @@
-export { defineAgent, type AgentDefinition, type Session } from "./agent.js";
+export { defineAgent, defineAgents, type AgentDefinition, type Session } from "./agent.js";
 export { current, maybeCurrent, type Context } from "./context.js";
 export { scenario, judge, expectJudge, type ScenarioOptions, type ScenarioResult } from "./scenario.js";
 export { render } from "./trace.js";

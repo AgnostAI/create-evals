@@ -1,10 +1,10 @@
 // Loads the mini project the way the CLI does and drives one turn without a model.
-import { loadAgent, loadConfig, prepare } from "../../../dist/project.js";
+import { loadAgents, loadConfig, prepare } from "../../../dist/project.js";
 import { runInContext } from "../../../dist/context.js";
 const root = new URL(".", import.meta.url).pathname;
 const config = loadConfig(root);
 await prepare(root, config);
-const agent = await loadAgent(root, config);
+const [agent] = await loadAgents(root, config);
 const events = [];
 const ctx = { profile: { id: "x", persona: "x" }, state: {}, record: (e) => events.push(e) };
 const out = await runInContext(ctx, async () => {

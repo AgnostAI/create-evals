@@ -52,6 +52,7 @@ Rules:
 - Only report what the transcript shows. Every problem needs a short exact quote as evidence (copy it character for character).
 - Report the root cause, not each consequence. At most 5 problems, most important first.
 - Style and tone aren't problems unless they mislead or harm.
+- Don't count words, characters or items by eye. Report a length or count violation only when it's beyond doubt, and quote the text.
 - If the simulated USER misbehaved, list it under simulator_issues; don't blame the agent for what the user caused.
 - An empty problems list is the right answer when the agent did well.`;
 
@@ -170,3 +171,107 @@ export async function group(traces: Trace[], description: string, modelId: strin
 }
 
 const rank = (s: string) => ({ high: 0, medium: 1, low: 2 })[s] ?? 3;
+
+const CONSISTENCY_SCHEMA = {
+  type: "object",
+  properties: {
+    issues: {
+      type: "array",
+      description: "Places where the same rule or fact is applied differently. Empty if everything is consistent.",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string", description: "kebab-case, 2-5 words" },
+          title: { type: "string", description: "What disagrees with what, concretely, naming the agents or inputs." },
+          should: { type: "string", description: "The single rule that should hold everywhere, as the developer would write it." },
+          severity: { type: "string", enum: ["high", "medium", "low"] },
+          evidence: {
+            type: "array",
+            description: "At least two exact quotes that contradict each other.",
+            items: {
+              type: "object",
+              properties: {
+                source: { type: "string", description: "A run id (e.g. r3) or an agent's name for a quote from its instructions." },
+                quote: { type: "string", description: "Short exact quote, copied character for character." },
+              },
+              required: ["source", "quote"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["id", "title", "should", "severity", "evidence"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["issues"],
+  additionalProperties: false,
+};
+
+export interface AgentContext {
+  name: string;
+  description: string;
+  instructions: string;
+}
+
+/**
+ * Compare runs against each other, and agents against each other: does every agent apply the same rule the
+ * same way, and does one agent treat similar inputs alike? A reviewer reading one trace can't see this.
+ * Every issue needs two grounded quotes (from runs or from instructions), or it's dropped.
+ */
+export async function consistency(traces: Trace[], agents: AgentContext[], modelId: string, known: FailureMode[] = [], budget = 250_000): Promise<FailureMode[]> {
+  const runs = traces.filter((t) => t.ended !== "user-error" && t.turns.length);
+  if (runs.length < 2 && agents.length < 2) return [];
+  const per = Math.max(600, Math.floor((budget * 0.6) / Math.max(1, runs.length)));
+  const clipText = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
+  const rendered = runs.map((t) => render(t, { clip: 400 }));
+  const listing = runs.map((t, i) => `=== r${i} (agent: ${t.agent}, input: ${t.profile.id}) ===\n${clipText(rendered[i]!, per)}`).join("\n\n");
+  const perAgent = Math.floor((budget * 0.4) / Math.max(1, agents.length));
+  const agentText = agents.map((a) => `=== agent: ${a.name} ===\n${a.description}\n\nInstructions:\n${clipText(a.instructions || "(none)", perAgent)}`).join("\n\n");
+  const out = await model.json<{ issues: { id: string; title: string; should: string; severity: FailureMode["severity"]; evidence: { source: string; quote: string }[] }[] }>({
+    model: modelId,
+    system: `You check a system of one or more AI agents for consistency, the way a senior engineer compares outputs side by side. You see each agent's instructions and many runs.
+
+Find places where the same rule, definition or fact is applied differently:
+- Across agents: one agent's output or instructions contradict another's (one treats a company, category or threshold one way, another the opposite way), so a pipeline would pass contradictory decisions downstream.
+- Across inputs: one agent treats inputs alike in the relevant respect differently (qualifies one, rejects a near-identical one) with no reason in the inputs.
+- Instructions against output: an agent's output applies a rule the opposite way from what its own or another agent's instructions state.
+
+Rules:
+- Only report a contradiction you can show with at least two exact quotes (from runs, by run id, or from an agent's instructions, by agent name). Copy quotes character for character.
+- Differences explained by the inputs aren't inconsistencies. Wording differences aren't either.
+- Precision over volume: report only what a developer would want to fix. An empty list is the right answer when things are consistent.${
+      known.length ? `\n- These problems are already reported from single runs. Don't report them again, even from another angle (e.g. a limit that differs between prompt and code, when the mode is about that limit):\n${known.map((m) => `  - ${m.title}`).join("\n")}` : ""
+    }`,
+    messages: [{ role: "user", content: `AGENTS:\n${agentText}\n\nRUNS:\n${listing}` }],
+    schema: CONSISTENCY_SCHEMA,
+  });
+  const textFor = (source: string): { text: string; trace?: string } | undefined => {
+    const m = /^\s*r(\d+)\b/i.exec(source);
+    if (m) {
+      const i = Number(m[1]);
+      return i < runs.length ? { text: rendered[i]!, trace: runs[i]!.id } : undefined;
+    }
+    const a = agents.find((x) => source.trim().toLowerCase().replace(/^agent:\s*/, "") === x.name.toLowerCase());
+    return a ? { text: `${a.description}\n${a.instructions}` } : undefined;
+  };
+  return out.issues.flatMap((issue) => {
+    const kept = issue.evidence.flatMap((e) => {
+      const src = textFor(e.source);
+      return src && grounded(e.quote, src.text) ? [{ ...e, trace: src.trace, label: src.trace ?? `${e.source.trim()} instructions` }] : [];
+    });
+    if (kept.length < 2) return [];
+    return [
+      {
+        id: issue.id,
+        title: issue.title,
+        should: issue.should,
+        severity: issue.severity,
+        kind: "inconsistency" as const,
+        traces: [...new Set(kept.flatMap((e) => (e.trace ? [e.trace] : [])))],
+        // For an inconsistency, the notes are the contradicting quotes.
+        notes: kept.map((e) => `${e.label}: "${e.quote}"`),
+      },
+    ];
+  });
+}
