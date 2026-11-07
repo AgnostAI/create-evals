@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+fixtures/*/node_modules/
+fixtures/*/evals/
+fixtures/*/.create-evals/
+*.tgz
+examples/*/node_modules/
+.create-evals/
+examples/*/.create-evals/
+*.tgz
+test/fixtures/*/node_modules

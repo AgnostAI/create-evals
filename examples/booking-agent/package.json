@@ -1,0 +1,25 @@
+{
+  "name": "booking-agent",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "chat": "tsx src/cli.ts",
+    "auth": "tsx src/auth.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "evals": "create-evals test"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.92",
+    "ai": "^7.0.157",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "create-evals": "file:../..",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

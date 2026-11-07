@@ -1,0 +1,129 @@
+// Model calls over plain fetch, so create-evals never conflicts with the AI SDK version an agent uses.
+// Models: "claude-…" or "anthropic:…" (ANTHROPIC_API_KEY), "gpt-…", "o…" or "openai:…" (OPENAI_API_KEY).
+
+export interface Message {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface JsonRequest {
+  model: string;
+  system: string;
+  messages: Message[];
+  /** JSON Schema for the reply. Objects need `additionalProperties: false` and every key in `required`. */
+  schema: Record<string, unknown>;
+  maxTokens?: number;
+  /** Anthropic effort: lower is faster and cheaper. Defaults to the model's own default. */
+  effort?: "low" | "medium" | "high";
+}
+
+export interface Model {
+  json<T>(req: JsonRequest): Promise<T>;
+}
+
+export class ModelError extends Error {}
+
+/** Read at call time, so .env, config `env` and config `models` (applied by prepare()) take effect. */
+export const DEFAULT_MODELS = () => ({
+  user: process.env.CREATE_EVALS_USER_MODEL || "claude-sonnet-5-5",
+  review: process.env.CREATE_EVALS_REVIEW_MODEL || "claude-sonnet-5-5",
+  group: process.env.CREATE_EVALS_GROUP_MODEL || "claude-sonnet-5-5",
+  judge: process.env.CREATE_EVALS_JUDGE_MODEL || "claude-sonnet-5-5",
+});
+
+/** The env var holding the key a model needs. */
+export function keyFor(modelId: string): string {
+  return provider(modelId).name === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+}
+
+/** Hosts create-evals itself talks to; the network guard always allows them. */
+export const MODEL_HOSTS = ["api.anthropic.com", "api.openai.com"];
+
+function provider(model: string): { name: "anthropic" | "openai"; id: string } {
+  const [prefix, rest] = model.includes(":") ? model.split(/:(.*)/s) : ["", model];
+  if (prefix === "openai" || (!prefix && /^(gpt-|o\d|chatgpt-)/.test(model))) return { name: "openai", id: rest! };
+  return { name: "anthropic", id: prefix === "anthropic" ? rest! : model };
+}
+
+async function post(url: string, headers: Record<string, string>, body: unknown): Promise<any> {
+  for (let attempt = 0; ; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body), signal: AbortSignal.timeout(300_000) });
+    } catch (e) {
+      // Network errors and timeouts: retry, then report as a model failure (tests skip rather than fail).
+      if (attempt >= 4) throw new ModelError(`${url}: ${(e as Error).message}`);
+      await new Promise((r) => setTimeout(r, 2000 * 2 ** attempt));
+      continue;
+    }
+    if (res.ok) {
+      try {
+        return await res.json();
+      } catch (e) {
+        throw new ModelError(`${url} returned a malformed body: ${(e as Error).message}`);
+      }
+    }
+    const text = await res.text();
+    const retryable = res.status === 429 || res.status === 529 || res.status >= 500;
+    if (!retryable || attempt >= 4) throw new ModelError(`${url} → ${res.status}: ${text.slice(0, 400)}`);
+    const wait = Number(res.headers.get("retry-after")) * 1000 || 2000 * 2 ** attempt;
+    await new Promise((r) => setTimeout(r, Math.min(wait, 30_000)));
+  }
+}
+
+function key(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new ModelError(`${name} is not set.`);
+  return value;
+}
+
+export const model: Model = {
+  async json<T>(req: JsonRequest): Promise<T> {
+    const p = provider(req.model);
+    if (p.name === "openai") {
+      const res = await post(
+        "https://api.openai.com/v1/chat/completions",
+        { authorization: `Bearer ${key("OPENAI_API_KEY")}` },
+        {
+          model: p.id,
+          messages: [{ role: "system", content: req.system }, ...req.messages],
+          response_format: { type: "json_schema", json_schema: { name: "reply", schema: req.schema, strict: true } },
+        },
+      );
+      const choice = res.choices?.[0];
+      if (choice?.message?.refusal) throw new ModelError(`${req.model} refused: ${choice.message.refusal}`);
+      if (!choice?.message?.content) throw new ModelError(`${req.model} returned no content (finish_reason ${choice?.finish_reason}).`);
+      try {
+        return JSON.parse(choice.message.content) as T;
+      } catch {
+        throw new ModelError(`${req.model} returned non-JSON: ${choice.message.content.slice(0, 200)}`);
+      }
+    }
+    // Server-side fallback: if the model declines (playing an adversarial user, reviewing a hostile
+    // transcript), the API retries on a fallback model inside the same call. Not available on Haiku.
+    const fallback = !/haiku/.test(p.id);
+    const res = await post(
+      "https://api.anthropic.com/v1/messages",
+      {
+        "x-api-key": key("ANTHROPIC_API_KEY"),
+        "anthropic-version": "2023-06-01",
+        ...(fallback ? { "anthropic-beta": "server-side-fallback-2026-07-01" } : {}),
+      },
+      {
+        model: p.id,
+        max_tokens: req.maxTokens ?? 16_000,
+        system: req.system,
+        messages: req.messages,
+        output_config: { format: { type: "json_schema", schema: req.schema }, ...(req.effort ? { effort: req.effort } : {}) },
+        ...(fallback ? { fallbacks: "default" } : {}),
+      },
+    );
+    if (res.stop_reason === "refusal") throw new ModelError(`${req.model} declined this request.`);
+    const text = (res.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new ModelError(`${req.model} returned non-JSON (stop_reason ${res.stop_reason}): ${text.slice(0, 200)}`);
+    }
+  },
+};
