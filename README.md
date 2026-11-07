@@ -31,7 +31,7 @@ None of these shows up in single-message tests. The first appears on turn three,
 3. **Review.** A model reads every conversation, including each tool call and the end state, and notes where the agent went wrong. Every note must quote the transcript. It checks what the agent *said* against what it *did*.
 4. **Group.** Notes become failure modes, grouped by root cause and ranked by how often they happen.
 5. **About 10 cases, yes or no.** You see one line per case, with what your agent did today: "Podium: US lead, LinkedIn says United States. Should it qualify? today: no". Your answers are the evals.
-6. **Done.** "10 evals created. Today 6 pass and 4 fail. Next: ask your coding agent to fix the 4 failing evals." `npx create-evals test` reruns them anytime.
+6. **Done.** "10 evals created. Today 6 pass and 4 fail. Next: ask your coding agent to fix the 4 failing evals." It then offers to run the passing ones before each commit or in GitHub Actions; nothing else in your project changes unless you say yes. `npx create-evals test` reruns them anytime.
 
 ## Get started
 
@@ -57,6 +57,8 @@ Afterwards, you run:
 ```bash
 npx create-evals find    # run, review, and list what went wrong (again, after changes)
 npx create-evals test    # run the tests (use --tier always in CI)
+npx create-evals hook    # optional: run the evals that pass today before each commit
+npx create-evals ci      # optional: same, in GitHub Actions
 ```
 
 Nothing to install, no config to write. It needs Node 22+ and `ANTHROPIC_API_KEY`, used for the simulated users and the reviewer. `OPENAI_API_KEY` works too, with `--model gpt-…`.

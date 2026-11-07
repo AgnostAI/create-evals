@@ -17,7 +17,9 @@ Run from the agent's repo root, as `npx create-evals <command>`. Nothing needs i
 | `create-evals show <trace-id> [--full]` | Prints a trace: the conversation, events (clipped unless `--full`), end state, basic checks and review. A prefix of the id works. |
 | `create-evals drop <trace-id…>` | Deletes traces that shouldn't count (setup mistakes, broken fakes). |
 | `create-evals reset` | Moves the current traces and failures to `.create-evals/archive/<time>/`, for a fresh round. |
-| `create-evals test [files…] [--runs n] [--tier always\|usually] [--only text] [--concurrency n]` | Runs `evals/*.eval.ts` (or the given files). Exits 1 only when an `always` test fails. |
+| `create-evals test [files…] [--runs n] [--tier always\|usually] [--only text] [--concurrency n] [--precommit]` | Runs `evals/*.eval.ts` (or the given files). Exits 1 only when an `always` test fails. `--precommit` = `--tier always --runs 1`, and skips (exit 0) when the model key isn't set. With `--tier always` and no `always` tests, exits 0. |
+| `create-evals hook` | Adds a pre-commit hook running the `always` evals: appends to husky's `.husky/pre-commit` if the repo already uses husky, else the git hook; for pre-commit/lefthook configs it prints the line to add. Never installs anything or overwrites a hook. |
+| `create-evals ci` | Writes `.github/workflows/evals.yml` running the `always` evals (never overwrites one). Needs the `ANTHROPIC_API_KEY` secret. |
 | `create-evals list [--json]` | Every run trace on one screen: first input, last output (or review summary), end state, outcome, problems. `--json` prints all of it for scripts and coding agents. |
 | `create-evals status` | Counts traces, reviews and failure modes. |
 

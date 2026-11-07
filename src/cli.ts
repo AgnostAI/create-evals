@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, w
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { AgentDefinition } from "./agent.js";
+import { installHook, writeWorkflow, type Step } from "./ci.js";
 import { DEFAULT_MODELS, keyFor } from "./llm.js";
 import { CONFIG_PATH, DIR, loadAgent, loadConfig, prepare, readInstructions, type Config } from "./project.js";
 import { group, review } from "./review.js";
@@ -12,7 +13,7 @@ import { registered, setCurrentFile, type Registered } from "./scenario.js";
 import { render } from "./trace.js";
 import type { FailureMode, Profile, Trace } from "./types.js";
 
-const VERSION = "0.1.3";
+const VERSION = "0.1.4";
 const tty = process.stdout.isTTY;
 const c = (code: number) => (s: string) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
 const [bold, dim, red, green, yellow] = [c(1), c(2), c(31), c(32), c(33)];
@@ -25,6 +26,8 @@ ${bold("Start here")}
 ${bold("Day to day")}
   create-evals find                 run simulated users, review every conversation, list what went wrong
   create-evals test                 run the tests in evals/ (--tier always in CI)
+  create-evals hook                 run them before every commit (optional)
+  create-evals ci                   run them in GitHub Actions (optional)
 
 ${bold("Building blocks")} (the skill uses these)
   init [--function]                 scaffold evals/agent.ts and ${CONFIG_PATH}
@@ -35,7 +38,7 @@ ${bold("Building blocks")} (the skill uses these)
   list [--json] | show <id> [--full] | status
   docs                              the full reference: config, binding API, scenario(), spawnSession(), Python helper
   drop <id…> | reset                discard bad traces, or archive this round and start fresh
-  test [files] [--runs n] [--tier always|usually] [--only text]
+  test [files] [--runs n] [--tier always|usually] [--only text] [--precommit]
 
 Options: --config <file>, --model <id> (review/group), --user-model <id>, --concurrency <n>
 Docs: https://github.com/AgnostAI/create-evals`;
@@ -45,7 +48,7 @@ interface Flags {
   [k: string]: string | boolean | string[];
 }
 
-const BOOLEAN_FLAGS = ["all", "help", "version", "full", "function", "json"];
+const BOOLEAN_FLAGS = ["all", "help", "version", "full", "function", "json", "precommit"];
 
 function parse(argv: string[]): Flags {
   const f: Flags = { _: [] };
@@ -221,6 +224,24 @@ Now open your coding agent in this folder and say:
 
 It runs your agent against simulated users, shows you what went wrong, asks you about anything
 that's your call, and writes tests. Takes about 20–30 minutes. Needs ANTHROPIC_API_KEY.`);
+}
+
+function report(step: Step) {
+  if (step.kind === "wrote") console.log(green(`✔ ${step.text}`));
+  else if (step.kind === "kept") console.log(dim(`· kept ${step.text}`));
+  else console.log(yellow(`! ${step.text}`));
+}
+
+/** `create-evals hook`: the evals that pass today run before every commit. Only when the developer asks for it. */
+function cmdHook() {
+  report(installHook(root));
+  console.log("\nBefore each commit, the evals marked always run. Known bugs never block. Skip once: git commit --no-verify");
+}
+
+/** `create-evals ci`: the same evals on every push, in GitHub Actions. Only when the developer asks for it. */
+function cmdCi() {
+  report(writeWorkflow(root));
+  console.log("\nOn every push, the evals marked always run. Last step: add ANTHROPIC_API_KEY to your GitHub repo's secrets.");
 }
 
 /** run → review → group, for people: one command from "nothing" to "here's what's broken". */
@@ -464,6 +485,11 @@ function cmdStatus() {
 }
 
 async function cmdTest(f: Flags) {
+  // --precommit: the always evals, one run each; never blocks a commit just because there's no key.
+  if (f.precommit) {
+    f.tier = "always";
+    f.runs ??= "1";
+  }
   const { config } = await setup();
   const files = f._.length > 1 ? f._.slice(1).map((x) => path.resolve(root, x)) : existsSync(path.join(root, "evals")) ? readdirSync(path.join(root, "evals")).filter((x) => /\.eval\.[cm]?[jt]s$/.test(x)).map((x) => path.join(root, "evals", x)) : [];
   if (!files.length) fail("No evals/*.eval.ts files.");
@@ -475,9 +501,12 @@ async function cmdTest(f: Flags) {
   if (f.tier) tests = tests.filter((t) => (t.opts.tier ?? "usually") === f.tier);
   if (f.only) tests = tests.filter((t) => t.name.includes(String(f.only)));
   if (f.tier && !["always", "usually"].includes(String(f.tier))) fail(`--tier must be "always" or "usually", got "${f.tier}"`);
+  // Nothing marked always yet means nothing can block: fine for a hook or CI.
+  if (!tests.length && f.tier === "always" && !f.only) return console.log(dim("No evals marked always yet, so nothing to block on."));
   if (!tests.length) fail(`No tests selected${f.only || f.tier ? " (check --only / --tier)" : ""}.`);
   const runsOverride = f.runs !== undefined ? count(f, "runs", 1) : process.env.CREATE_EVALS_RUNS ? Number(process.env.CREATE_EVALS_RUNS) : undefined;
   const userModel = (f["user-model"] as string) || DEFAULT_MODELS().user;
+  if (f.precommit && !process.env[keyFor(userModel)]) return console.log(dim(`create-evals: skipped (${keyFor(userModel)} isn't set)`));
   if (tests.some((t) => t.opts.profile.input === undefined)) requireKey(userModel);
   console.log(dim(`Running ${tests.length} test(s)…`));
 
@@ -551,6 +580,7 @@ async function cmdTest(f: Flags) {
   const pass = tests.length - failed.length;
   console.log(`\n${bold(`${pass} of ${tests.length} pass.`)}${failed.length ? ` ${failed.length} fail: ask your coding agent to fix the agent until they pass, then run this again.` : ""}`);
   // Only "always" evals fail the process (for CI); the rest are reported.
+  if (blocking && f.precommit) console.log(dim("Commit stopped: an eval that used to pass now fails. To commit anyway once: git commit --no-verify"));
   if (blocking) process.exit(1);
 }
 
@@ -574,6 +604,8 @@ async function main() {
   if (cmd === "drop") return cmdDrop(f);
   if (cmd === "reset") return cmdReset();
   if (cmd === "test") return cmdTest(f);
+  if (cmd === "hook") return cmdHook();
+  if (cmd === "ci") return cmdCi();
   fail(`Unknown command "${cmd}". Run create-evals --help.`);
 }
 

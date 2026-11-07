@@ -7,7 +7,7 @@ You're going to give the developer **about 10 evals**: concrete cases, each with
 To find cases that matter, don't guess. Run the agent on many realistic cases, read what it actually did, and pick the ones that show what's broken (and a few things it gets right). The developer never sees that work. They see ~10 one-line cases, answer yes or no to each, and get their evals.
 
 ```
-1 set up → 2 profiles → 3 run, review, group → 4 pick ~10 cases → 5 developer answers y/n → 6 write the evals → 7 done
+1 set up → 2 profiles → 3 run, review, group → 4 pick ~10 cases → 5 developer answers y/n → 6 write the evals → 7 done (offer commit hook / CI)
                 ▲                    │
                 └─ found little: harder cases ─┘
 ```
@@ -210,20 +210,28 @@ Run: `npx create-evals test`
 | 4 | Toyota: only its headquarters is in the US | US team: no | ✓ no |
 ```
 
-If the repo has a package.json, add `"evals": "npx -y create-evals test"` to its scripts.
+In a Python repo, a new top-level `evals/` folder can break `pip install -e .` (setuptools finds two packages): if it does, add `[tool.setuptools.packages.find] exclude = ["evals*"]` to `pyproject.toml` yourself, without mentioning it in the done message.
+
+**Protect what works:** add `tier: "always"` to every eval that passes today. Only those can block a commit or CI later; failing ones are known bugs and never block. When an eval starts passing after a fix, mark it `always` too.
+
+Touch nothing else in their project: no package.json scripts, hooks or CI unless they ask (step 7).
 
 ### 7. Done
 
-End with exactly this, and nothing else:
+End with exactly this, and nothing else (no notes before or after it):
 
 ```
 ✔ 10 evals created in evals/ (listed in evals/evals.md)
   Today 6 pass and 4 fail: 1, 2, 3 and 6. Those are bugs in your agent.
   Run anytime: npx create-evals test
-  Next: ask your coding agent to fix the 4 failing evals.
+  Next: ask me to fix the 4 failing evals.
+
+Want the 6 passing evals to run automatically? Reply: commit (before each commit), ci (GitHub Actions), both, or no.
 ```
 
-Causes, file paths, how things are faked, and costs are for when they ask. If they ask you to fix the failing evals: fix the agent (not the evals), run `npx -y create-evals test` again, and report the new count in the same format.
+On "commit", run `npx -y create-evals hook`; on "ci", run `npx -y create-evals ci` (both on "both"). If it prints `!`, do what it says (e.g. add the line to their pre-commit config). For CI, make the workflow's install step match how this repo installs (it's a guess from the lockfiles). Don't commit or push. Then reply in one or two lines: what now runs when, and for CI, that they need to add `ANTHROPIC_API_KEY` to their GitHub secrets.
+
+Causes, file paths, how things are faked, and costs are for when they ask. If they ask you to fix the failing evals: fix the agent (not the evals), mark each newly passing eval `always`, run `npx -y create-evals test` again, and report the new count in the same format.
 
 ### Reference
 
@@ -237,7 +245,9 @@ Causes, file paths, how things are faked, and costs are for when they ask. If th
 | `create-evals show <trace-id> [--full]` | A conversation with its events, end state and review |
 | `create-evals drop <trace-id…>` | Delete traces that shouldn't count |
 | `create-evals reset` | Archive this round's traces and failures; start fresh |
-| `create-evals test [files] [--runs n] [--tier always] [--only text]` | Run `evals/*.eval.ts` |
+| `create-evals test [files] [--runs n] [--tier always] [--only text] [--precommit]` | Run `evals/*.eval.ts` (`--precommit`: the `always` evals, one run each, skipped without a key) |
+| `create-evals hook` | Pre-commit hook running the `always` evals (only if the developer asks) |
+| `create-evals ci` | `.github/workflows/evals.yml` running the `always` evals (only if the developer asks) |
 | `create-evals list` | Every run on one screen: input, outcome, output, problems |
 | `create-evals status` | Counts of traces, reviews and failure modes |
 

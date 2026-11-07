@@ -1,6 +1,6 @@
 {
   "name": "create-evals",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Find your AI agent's real failures and turn each one into a test. Runs your agent against simulated users, reviews every conversation, and groups what went wrong.",
   "type": "module",
   "bin": {
