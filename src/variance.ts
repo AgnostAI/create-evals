@@ -27,7 +27,11 @@ export function leaves(value: unknown, prefix = "", out: Record<string, unknown>
   if (value === null || typeof value !== "object") out[at] = value;
   else if (Array.isArray(value)) {
     if (value.every((v) => v === null || typeof v !== "object")) out[at] = value.map(String).sort();
-    else if (depth < 4) value.slice(0, 20).forEach((v, i) => leaves(v, `${at}[${i}]`, out, depth + 1));
+    else if (depth < 4) {
+      // How many there are is a decision of its own ("found 3 people, not 2"), compared once instead of per item.
+      out[`${at}.length`] = value.length;
+      value.slice(0, 20).forEach((v, i) => leaves(v, `${at}[${i}]`, out, depth + 1));
+    }
   } else if (depth < 4) {
     for (const [k, v] of Object.entries(value)) leaves(v, prefix ? `${prefix}.${k}` : k, out, depth + 1);
   }
@@ -65,9 +69,8 @@ export function matches(field: string, patterns: string[]): boolean {
   });
 }
 
-/** What a function run produced: its state (or JSON reply), by path. A crash is its own outcome. */
+/** What a function run produced: its state (or JSON reply), by path. */
 function outcome(t: Trace): Record<string, unknown> {
-  if (t.ended === "agent-error") return { outcome: "crashed" };
   const reply = t.turns.findLast((x) => x.role === "agent")?.text ?? "";
   return leaves(t.state ?? parseJson(reply) ?? reply);
 }
@@ -96,18 +99,23 @@ export function variance(traces: Trace[], decisions: Record<string, string[] | u
     const declared = decisions[agent];
     const v: Variance = { agent, profile: runs[0]!.profile.id, runs: runs.length, fields: [], strong: false };
     if (runs[0]!.profile.input !== undefined) {
-      const maps = runs.map(outcome);
+      // A crash is its own answer ("outcome: crashed"); its fields aren't missing values, so compare the rest without it.
+      const crashed = runs.filter((t) => t.ended === "agent-error").length;
+      const maps = runs.filter((t) => t.ended !== "agent-error").map(outcome);
+      if (crashed && maps.length) v.fields.push({ field: "outcome", kind: "declared", values: [["ok", maps.length], ["crashed", crashed]] });
       for (const field of new Set(maps.flatMap((m) => Object.keys(m)))) {
         const present = maps.filter((m) => field in m).map((m) => m[field]);
+        // An item only some runs have (people[2] when one run found a third person) is a length difference, already
+        // reported as people.length: comparing its fields would show "(not in output)" for each one.
+        if (field.includes("[") && present.length < maps.length) continue;
         let kind: FieldKind | undefined;
-        if (field === "outcome") kind = "declared";
-        else if (declared) kind = matches(field, declared) ? "declared" : undefined;
+        if (declared) kind = matches(field, declared) ? "declared" : undefined;
         // A field counts only if it's decision-shaped in every run; one free-text value makes it free text.
         else kind = fieldKind(present);
         if (!kind) continue;
         const counts = new Map<string, number>();
         for (const m of maps) {
-          const val = !(field in m) ? "(missing)" : Array.isArray(m[field]) ? `[${(m[field] as string[]).join(", ")}]` : String(m[field]);
+          const val = !(field in m) ? "(not in output)" : Array.isArray(m[field]) ? `[${(m[field] as string[]).join(", ")}]` : String(m[field]);
           counts.set(val, (counts.get(val) ?? 0) + 1);
         }
         if (counts.size > 1) v.fields.push({ field, kind, values: [...counts].sort((a, b) => b[1] - a[1]) });
@@ -134,10 +142,11 @@ export function describe(v: Variance, maxFields = 3): string {
 }
 
 /**
- * How often a failure mode happens per input that ran more than once: "2 of 3 runs of acme".
- * A mode that shows up in only some runs of the same input is a coin flip, not a bug that reproduces every time.
+ * How often the reviewer flagged a failure mode per input that ran more than once: "acme: flagged in 2 of 3 runs".
+ * This counts review notes, not behavior: when the input's decisions were the same in every run, it says so,
+ * because then the agent did the same thing each time and the reviewer only noted it in some.
  */
-export function modeRates(mode: FailureMode, traces: Trace[]): string[] {
+export function modeRates(mode: FailureMode, traces: Trace[], flips: Variance[] = variance(traces)): string[] {
   const byId = new Map(traces.map((t) => [t.id, t]));
   const inMode = new Map<string, number>();
   for (const id of mode.traces) {
@@ -146,8 +155,11 @@ export function modeRates(mode: FailureMode, traces: Trace[]): string[] {
   }
   const out: string[] = [];
   for (const [profile, n] of inMode) {
-    const total = traces.filter((t) => t.profile.id === profile && t.review).length;
-    if (total > 1) out.push(`${n} of ${total} runs of ${profile}`);
+    const runs = traces.filter((t) => t.profile.id === profile && t.review);
+    if (runs.length < 2) continue;
+    const fn = runs[0]!.profile.input !== undefined;
+    const steady = fn && n < runs.length && !flips.some((v) => v.profile === profile && v.strong);
+    out.push(`${profile}: flagged in ${n} of ${runs.length} runs${steady ? " (same decisions in all; the agent likely erred every time)" : ""}`);
   }
   return out;
 }

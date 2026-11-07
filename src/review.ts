@@ -240,9 +240,12 @@ Find places where the same rule, definition or fact is applied differently:
 
 Rules:
 - Only report a contradiction you can show with at least two exact quotes (from runs, by run id, or from an agent's instructions, by agent name). Copy quotes character for character.
+- Show it in action: when runs show the disagreement (one agent's output decides one way, another's the other way, about the same company, item or case), quote a run from each side. Quote instructions to name the rule, not instead of the runs.
 - Differences explained by the inputs aren't inconsistencies. Wording differences aren't either.
 - Precision over volume: report only what a developer would want to fix. An empty list is the right answer when things are consistent.${
-      known.length ? `\n- These problems are already reported from single runs. Don't report them again, even from another angle (e.g. a limit that differs between prompt and code, when the mode is about that limit):\n${known.map((m) => `  - ${m.title}`).join("\n")}` : ""
+      known.length
+        ? `\n- These problems are already reported from single runs. Don't restate one of them as a contradiction within one agent (e.g. a limit that differs between its prompt and its code, when the mode is about that limit). But a mode about one agent getting something wrong doesn't cover two agents disagreeing about it: report that disagreement, with runs from both.\n${known.map((m) => `  - ${m.title}`).join("\n")}`
+        : ""
     }`,
     messages: [{ role: "user", content: `AGENTS:\n${agentText}\n\nRUNS:\n${listing}` }],
     schema: CONSISTENCY_SCHEMA,
@@ -262,10 +265,12 @@ Rules:
       return src && grounded(e.quote, src.text) ? [{ ...e, trace: src.trace, label: src.trace ?? `${e.source.trim()} instructions` }] : [];
     });
     if (kept.length < 2) return [];
+    // A clash between prompts that no run shows is still worth knowing, but say that it's only on paper.
+    const onPaper = !kept.some((e) => e.trace);
     return [
       {
         id: issue.id,
-        title: issue.title,
+        title: onPaper ? `${issue.title} (in the prompts; no run quoted)` : issue.title,
         should: issue.should,
         severity: issue.severity,
         kind: "inconsistency" as const,

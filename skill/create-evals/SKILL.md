@@ -234,7 +234,7 @@ scenario(agent, "1. Podium (US lead, LinkedIn says United States) qualifies", {
 - **Every eval also fails on crashes, empty replies and blocked network calls** automatically.
 - **With several agents,** import the one the eval is about: `import { triage } from "./agent.js"`.
 - **An eval that needs the output to change shape first** (a field the agent doesn't produce yet): write it against the shape you expect and add `pending: "needs triage to output a roundup field"`. It runs and shows as `◌`, never counts as a failure, and `test` tells you when it starts passing.
-- **An eval that guards a rule in the prompt must fail without that rule.** Check it: `npx -y create-evals ablate --test "<eval name>" --remove "<the rule's exact text>" --in <prompt file>` runs the eval today and on a temp copy without the rule, and says whether it has teeth. If it has none, sharpen the input or the check.
+- **An eval that guards a rule in the prompt must fail without that rule.** Check it: `npx -y create-evals ablate --test "<eval name>" --remove "<the rule's exact text>" --in <prompt file>` runs the eval today and on a temp copy without the rule, and says whether it has teeth (for a rule over several lines, put its exact text in a file and pass `--remove-file`). If it has none, sharpen the input or the check once. If it still has none, the model follows that rule without being told, or another rule covers it: keep the eval as a guard and move on, rather than trying again and again.
 - **Inputs:** inline them in the test, or keep larger ones (payloads, seed data, fake pages) under `evals/fixtures/`. `.create-evals/` is scratch and gitignored.
 
 Write `evals/evals.md` as the same list, so anyone can read and edit it:
@@ -250,7 +250,7 @@ Run: `npx create-evals test`
 | 4 | Toyota: only its headquarters is in the US | US team: no | ✓ no |
 ```
 
-**Protect what works:** add `tier: "always"` to every eval that passes today. Only those can block a commit or CI later; failing ones are known bugs and never block. When an eval starts passing after a fix, mark it `always` too.
+**Protect what works:** add `tier: "always"` to every eval that passes reliably today: run the passing ones with `npx -y create-evals test --runs 3`, and mark `always` only those that pass all 3 and whose case didn't flip in the earlier runs ("Same input, different decisions"). Only `always` evals can block a commit or CI; one that flips would block at random. Leave flaky ones `usually` and list them as flaky in `evals/evals.md`. Failing ones are known bugs and never block. When an eval starts passing reliably after a fix, mark it `always` too.
 
 Touch nothing else in their project: no package.json scripts, hooks or CI unless they ask (step 7).
 
@@ -261,11 +261,14 @@ End with exactly this, and nothing else (no notes before or after it):
 ```
 ✔ 10 evals created in evals/ (listed in evals/evals.md)
   Today 6 pass and 4 fail: 1, 2, 3 and 6. Those are bugs in your agent.
+  Pending: 9 (until triage returns one lead per company).
   Run anytime: npx create-evals test
   Next: ask me to fix the 4 failing evals.
 
 Want the 6 passing evals to run automatically? Reply: commit (before each commit), ci (GitHub Actions), both, or no.
 ```
+
+Leave out the "Pending" line when there are none. Count only evals marked `always` as "passing evals" in the last line.
 
 On "commit", run `npx -y create-evals hook`; on "ci", run `npx -y create-evals ci` (both on "both"). If it prints `!`, do what it says (e.g. add the line to their pre-commit config). For CI, make the workflow's install step match how this repo installs (it's a guess from the lockfiles). Don't commit or push. Then reply in one or two lines: what now runs when, and for CI, that they need to add `ANTHROPIC_API_KEY` to their GitHub secrets.
 
@@ -285,7 +288,7 @@ Causes, file paths, how things are faked, and costs are for when they ask. If th
 | `create-evals drop <trace-id…>` | Delete traces that shouldn't count |
 | `create-evals reset` | Archive this round's traces and failures; start fresh |
 | `create-evals test [files] [--runs n] [--tier always] [--only text] [--precommit]` | Run `evals/*.eval.ts` (`--precommit`: the `always` evals, one run each, skipped without a key) |
-| `create-evals ablate --test t --remove "text" --in file` | Does an eval have teeth? Runs it with the change on a temp copy |
+| `create-evals ablate --test t (--remove "text" \| --remove-file f) --in file` | Does an eval have teeth? Runs it with the change on a temp copy |
 | `create-evals hook` | Pre-commit hook running the `always` evals (only if the developer asks) |
 | `create-evals ci` | `.github/workflows/evals.yml` running the `always` evals (only if the developer asks) |
 | `create-evals list [--json]` | Every run on one screen: input, outcome, output, problems, answers that flip |
