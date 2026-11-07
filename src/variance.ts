@@ -134,7 +134,7 @@ export function describe(v: Variance, maxFields = 3): string {
 }
 
 /**
- * How often a failure mode happens per input that ran more than once: "2 of 3 runs of datadog".
+ * How often a failure mode happens per input that ran more than once: "2 of 3 runs of acme".
  * A mode that shows up in only some runs of the same input is a coin flip, not a bug that reproduces every time.
  */
 export function modeRates(mode: FailureMode, traces: Trace[]): string[] {

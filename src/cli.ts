@@ -18,7 +18,7 @@ import { render } from "./trace.js";
 import type { FailureMode, Profile, Trace } from "./types.js";
 import { describe, modeRates, variance } from "./variance.js";
 
-const VERSION = "0.1.5";
+const VERSION = "0.1.6";
 const tty = process.stdout.isTTY;
 const c = (code: number) => (s: string) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
 const [bold, dim, red, green, yellow] = [c(1), c(2), c(31), c(32), c(33)];
@@ -29,14 +29,14 @@ ${bold("Start here")}
   npx create-evals                  set up the skill, then open your coding agent and run /create-evals
 
 ${bold("Day to day")}
-  create-evals find                 run simulated users, review every conversation, list what went wrong
+  create-evals find                 run your agent on realistic cases, review every run, list what went wrong
   create-evals test                 run the tests in evals/ (--tier always in CI)
   create-evals hook                 run them before every commit (optional)
   create-evals ci                   run them in GitHub Actions (optional)
 
 ${bold("Building blocks")} (the skill uses these)
   init [--function] [--python]      scaffold evals/agent.ts (+ evals/run_agent.py in a Python repo) and ${CONFIG_PATH}
-  check [--message m] [--agent a]   one short conversation, to prove the setup works
+  check [--message m] [--agent a]   run the example input (or one short chat), to prove the setup works
   import <file> [--input-field f]   real records (JSONL, JSON, CSV) → profiles: replay production inputs
   run [--profiles f] [--only a,b] [--repeat n] [--agent a]
   review [--all] [--concurrency n]  note what went wrong in each new trace (6 at a time by default)
@@ -300,7 +300,7 @@ Now open your coding agent in this folder and say:
 
   ${bold("/create-evals")}   ${dim("(or: \"find what my agent gets wrong and write evals for it\")")}
 
-It runs your agent against simulated users, shows you what went wrong, asks you about anything
+It runs your agent on realistic cases (chats, functions or pipelines), shows you what went wrong, asks you about anything
 that's your call, and writes tests. Takes about 20–30 minutes for one agent, longer for a pipeline.
 Needs ANTHROPIC_API_KEY.`);
 }
@@ -379,7 +379,7 @@ async function checkOne(agent: AgentDefinition, f: Flags): Promise<boolean> {
         maxTurns: 2,
       };
   if (!fn) requireKey(DEFAULT_MODELS().user);
-  console.log(dim(`Running one short conversation with ${agent.name}…`));
+  console.log(dim(`Running ${fn ? "the example input" : "one short conversation"} with ${agent.name}…`));
   const t = await converse(agent, profile, { userModel: DEFAULT_MODELS().user });
   saveTrace(t, "checks");
   console.log(render(t));
@@ -426,7 +426,7 @@ async function cmdRun(f: Flags) {
   if (!queue.length) fail("No profiles to run.");
   const userModel = (f["user-model"] as string) || DEFAULT_MODELS().user;
   if (queue.some((p) => p.input === undefined)) requireKey(userModel);
-  console.log(dim(`Running ${queue.length} conversation(s) with ${[...new Set(queue.map((p) => agentFor.get(p)!.name))].join(", ")}…`));
+  console.log(dim(`Running ${queue.length} case(s) with ${[...new Set(queue.map((p) => agentFor.get(p)!.name))].join(", ")}…`));
   const traces = await converseAll((p) => agentFor.get(p)!, queue, {
     concurrency: count(f, "concurrency", config.concurrency ?? 4),
     userModel,
@@ -437,7 +437,7 @@ async function cmdRun(f: Flags) {
   });
   const flagged = traces.filter((t) => t.checks.length || t.ended === "agent-error").length;
   console.log(`\n${traces.length} traces saved to ${DIR}/traces/${flagged ? `, ${yellow(`${flagged} with basic-check findings`)}` : ""}. Next: create-evals review`);
-  if (traces.every((t) => t.ended === "user-error" || t.ended === "agent-error")) fail("Every conversation failed before it got going. Check the errors above (create-evals show <id>).");
+  if (traces.every((t) => t.ended === "user-error" || t.ended === "agent-error")) fail("Every run failed before it got going. Check the errors above (create-evals show <id>).");
 }
 
 async function cmdReview(f: Flags) {
@@ -471,7 +471,7 @@ async function cmdReview(f: Flags) {
     }),
   );
   const reviewed = todo.filter((t) => t.review).length;
-  console.log(`\n${withProblems}/${reviewed} reviewed conversations had problems${reviewed < todo.length ? red(`; ${todo.length - reviewed} reviews failed`) : ""}. Next: create-evals group`);
+  console.log(`\n${withProblems}/${reviewed} reviewed runs had problems${reviewed < todo.length ? red(`; ${todo.length - reviewed} reviews failed`) : ""}. Next: create-evals group`);
   if (!reviewed) process.exit(1);
 }
 
@@ -503,8 +503,8 @@ async function cmdGroup(f: Flags) {
   if (previous.length) writeFileSync(dir("failures.prev.json"), readFileSync(dir("failures.json")));
   writeFileSync(dir("failures.json"), JSON.stringify({ reviewed: reviewed.length, modes }, null, 2) + "\n");
   const flips = variance(traces, await decisionFields(agents));
-  if (!modes.length && !flips.length) return console.log(green(`No problems found in ${reviewed.length} conversations. Make the profiles harder and run again.`));
-  if (modes.length) console.log(bold(`${modes.length} failure mode(s) across ${reviewed.length} reviewed conversations:\n`));
+  if (!modes.length && !flips.length) return console.log(green(`No problems found in ${reviewed.length} runs. Make the cases harder and run again.`));
+  if (modes.length) console.log(bold(`${modes.length} failure mode(s) across ${reviewed.length} reviewed runs:\n`));
   for (const m of modes) printMode(m, reviewed.length, traces);
   printVariance(flips);
   console.log(dim(`Saved to ${DIR}/failures.json. Read the traces behind each mode (create-evals show <trace>). Report clear bugs; ask the developer only about judgment calls, in plain words.`));
@@ -512,7 +512,7 @@ async function cmdGroup(f: Flags) {
 
 function printMode(m: FailureMode, total: number, traces: Trace[]) {
   const sev = m.severity === "high" ? red(m.severity) : m.severity === "medium" ? yellow(m.severity) : dim(m.severity);
-  const where = m.kind === "inconsistency" ? "inconsistency, found by comparing runs" : `${m.traces.length}/${total} conversations`;
+  const where = m.kind === "inconsistency" ? "inconsistency, found by comparing runs" : `${m.traces.length}/${total} runs`;
   console.log(`${bold(m.title)}  ${dim(`${m.id} · ${where} ·`)} ${sev}`);
   console.log(`  rule: ${m.should}`);
   const rates = m.kind === "inconsistency" ? [] : modeRates(m, traces);

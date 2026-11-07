@@ -5,7 +5,7 @@
 Most teams start evals by guessing what might go wrong, and the evals they write pass and catch nothing. Teams with good evals do something else: they run the agent, read what it actually did, and test what broke. create-evals makes that loop cheap enough to do on day one, before you have users or production traces.
 
 ```
-run your agent against simulated users → review every conversation → group what went wrong
+run your agent on realistic cases → review every run → group what went wrong
    → you confirm which are bugs → each bug becomes a test that fails today
 ```
 
@@ -27,8 +27,8 @@ None of these shows up in single-message tests. The first appears on turn three,
 ## How it works
 
 1. **Run the agent for real, safely.** Your agent's own code runs, including its tool logic and guards. What the tools touch outside the process (calendars, payments, email, databases) is pointed at a test account, or swapped for a small in-memory fake the coding agent writes. Every other network request is blocked, so evals never act for real.
-2. **Simulated users.** A model plays realistic people with goals, details, and a temperament: patient, vague, pushy, changing their mind. The profiles are written from your agent's code, not from a generic list.
-3. **Review.** A model reads every conversation, including each tool call and the end state, and notes where the agent went wrong. Every note must quote the transcript. It checks what the agent *said* against what it *did*.
+2. **Realistic cases.** Written from your agent's code, not from a generic list. Chats, single-call functions (classifiers, triage, research) and multi-step LLM pipelines all work: a function gets realistic inputs aimed at its close calls; a chat gets simulated people with goals, details, and a temperament (patient, vague, pushy, changing their mind).
+3. **Review.** A model reads every run, including each tool call, pipeline step and the end state, and notes where the agent went wrong. Every note must quote the transcript. It checks what the agent *said* against what it *did*.
 4. **Group.** Notes become failure modes, grouped by root cause and ranked by how often they happen.
 5. **About 10 cases, yes or no.** You see one line per case, with what your agent did today: "Podium: US lead, LinkedIn says United States. Should it qualify? today: no". Your answers are the evals.
 6. **Done.** "10 evals created. Today 6 pass and 4 fail. Next: ask your coding agent to fix the 4 failing evals." It then offers to run the passing ones before each commit or in GitHub Actions; nothing else in your project changes unless you say yes. `npx create-evals test` reruns them anytime.
@@ -61,7 +61,7 @@ npx create-evals hook    # optional: run the evals that pass today before each c
 npx create-evals ci      # optional: same, in GitHub Actions
 ```
 
-Nothing to install, no config to write. It needs Node 22+ and `ANTHROPIC_API_KEY`, used for the simulated users and the reviewer. `OPENAI_API_KEY` works too, with `--model gpt-…`.
+Nothing to install, no config to write. It needs Node 22+ and `ANTHROPIC_API_KEY`, used for the reviewer (and simulated users, for chats). `OPENAI_API_KEY` works too, with `--model gpt-…`.
 
 ## What ends up in your repo
 
@@ -79,10 +79,10 @@ A test reads like this:
 
 ```ts
 scenario(agent, "never disowns a booking it made", {
-  profile: { persona: `You're Nikhil (nikhil@orbitdesk.io). Book Friday 1pm. Afterwards ask "is it definitely booked? I don't see the invite".` },
+  profile: { persona: `You're Nikhil (nikhil@orbitdesk.example). Book Friday 1pm. Afterwards ask "is it definitely booked? I don't see the invite".` },
   runs: 2,
   async check({ trace, state, said }) {
-    const mine = state.bookings.filter((b) => b.guest === "nikhil@orbitdesk.io");
+    const mine = state.bookings.filter((b) => b.guest === "nikhil@orbitdesk.example");
     assert.equal(mine.length, 1);                 // what actually happened
     assert.ok(said.includes(mine[0].code));       // what it told the guest
     await expectJudge(trace, "Never says a booking that exists is fake.");
