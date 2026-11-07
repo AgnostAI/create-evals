@@ -15,7 +15,14 @@ export interface ScenarioResult {
 
 export interface ScenarioOptions {
   /** The simulated user for this test. Usually taken from the failing trace's profile, sharpened. */
-  profile: Omit<Profile, "id"> & { id?: string };
+  profile?: Omit<Profile, "id"> & { id?: string };
+  /** For function agents: the input, instead of `profile: { input }`. */
+  input?: unknown;
+  /**
+   * The test is expected to fail until something else changes (e.g. the output needs a new field). Say what.
+   * It runs and is reported, but never counts as a failure; when it starts passing, you're told to drop `pending`.
+   */
+  pending?: string;
   /** Throw (e.g. with node:assert) when the agent got it wrong. Check end state and actions first; text last. */
   check?: (r: ScenarioResult) => void | Promise<void>;
   /** Conversations per test run. Default 1, or CREATE_EVALS_RUNS. */
@@ -49,7 +56,15 @@ export function registered(): Registered[] {
 /** Declare a test: a simulated conversation plus what must (not) happen in it. Run with `create-evals test`. */
 export function scenario(agent: AgentDefinition, name: string, opts: ScenarioOptions): void {
   if (registry.some((r) => r.name === name)) throw new Error(`Two scenarios are named "${name}".`);
+  if (!agent || typeof (agent as any).start !== "function") throw new Error(`scenario "${name}": the first argument must be an agent from defineAgent() (with defineAgents, import the one you mean).`);
+  if (!opts.profile && opts.input === undefined) throw new Error(`scenario "${name}": give a profile, or an input for a function agent.`);
   registry.push({ agent, name, file: currentFile, opts });
+}
+
+/** The profile a scenario runs: `profile`, with `input` folded in. */
+export function scenarioProfile(r: Registered): Profile {
+  const p = { ...r.opts.profile, ...(r.opts.input !== undefined ? { input: r.opts.input } : {}) };
+  return { id: r.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40), ...p } as Profile;
 }
 
 const VERDICT = {

@@ -39,7 +39,7 @@ create-evals run
          → .create-evals/traces/<id>.json
 ```
 
-`create-evals review` sends each trace to the reviewer (`src/review.ts`). The trace is rendered by `src/trace.ts`, with tool and state events interleaved between turns and the end state at the bottom. It goes along with the agent's description and instructions. The reviewer returns problems with quoted evidence, and problems whose quote isn't in the transcript are dropped. `create-evals group` sends all the problems in one call and gets back failure modes grouped by root cause.
+`create-evals review` sends each trace to the reviewer (`src/review.ts`). The trace is rendered by `src/trace.ts`, with tool and state events interleaved between turns and the end state at the bottom. It goes along with the agent's description and instructions. The reviewer returns problems with quoted evidence, and problems whose quote isn't in the transcript are dropped. `create-evals group` sends all the problems in one call and gets back failure modes grouped by root cause. For pipelines and function agents it also sends every run plus every agent's instructions in a second call (`consistency()`), which looks for the same rule applied differently; each contradiction must be backed by two grounded quotes. Variance (the same input getting different decisions across runs) is computed without a model, from the booleans, numbers and short labels in each output.
 
 `create-evals test` imports `evals/*.eval.ts`. Each `scenario()` call registers a test. Every test runs `converse()` `runs` times; a run fails on any basic-check finding or a throw from `check()`. A test passes when enough runs pass for its tier.
 
@@ -49,7 +49,7 @@ create-evals run
 |---|---|---|
 | `evals/agent.ts` | coding agent | the binding: how to start a conversation and send a message |
 | `evals/create-evals.json` | coding agent | `replace`, `allowHosts`, `env`, `now`, `concurrency`, `models` |
-| `.create-evals/profiles.json` | coding agent | simulated users |
+| `.create-evals/profiles.json` | coding agent, or `import` from real records | simulated users and inputs |
 | `.create-evals/traces/*.json` | `run`, `test`, `check` | one conversation each: turns, events, end state, checks, review |
 | `.create-evals/failures.json` | `group` | failure modes with counts, traces and the rule each breaks |
 | `evals/evals.md` | coding agent, edited by the developer | what the agent must and mustn't do, in plain English |
@@ -69,15 +69,18 @@ create-evals run
 
 ```
 src/
-  cli.ts        commands: init, check, run, review, group, show, test, status
+  cli.ts        commands: init, check, import, run, review, group, list, show, test, ablate, status
   project.ts    config, sandbox setup, loading the binding, reading instructions
   sandbox.ts    network guard, shifted clock
   hooks.ts      loader hooks for module replacement
   context.ts    AsyncLocalStorage conversation context: current()
-  agent.ts      defineAgent, Session types
+  agent.ts      defineAgent, defineAgents, Session types
   run.ts        converse(): one conversation; converseAll()
   user.ts       simulated user
-  review.ts     review() and group()
+  review.ts     review(), group(), consistency()
+  variance.ts   same input, different answers; failure-mode rates per input
+  import.ts     real records (JSONL, JSON, CSV) → profiles
+  ablate.ts     temp copy of the repo with one change, for `ablate`
   checks.ts     basic checks that need no model
   trace.ts      render a trace as text
   scenario.ts   scenario(), judge(), expectJudge()

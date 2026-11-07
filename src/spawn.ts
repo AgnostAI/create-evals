@@ -29,13 +29,17 @@ export interface SpawnOptions {
  */
 export function spawnSession(ctx: Context, command: string[], opts: SpawnOptions = {}): Session {
   const [cmd, ...args] = command;
+  const cwd = opts.cwd ?? process.cwd();
+  // The repo itself (and src/, for src layouts) goes on the path, so `import myapp` finds this checkout's
+  // code without sys.path tricks, ahead of an editable install that may point at another copy.
+  const repoPaths = [cwd, path.join(cwd, "src")].filter((d) => existsSync(d));
   const child = spawn(cmd!, args, {
-    cwd: opts.cwd ?? process.cwd(),
+    cwd,
     stdio: ["pipe", "pipe", "pipe"],
     env: {
       ...process.env,
       ...opts.env,
-      PYTHONPATH: [pythonHelperDir, opts.env?.PYTHONPATH ?? process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+      PYTHONPATH: [pythonHelperDir, ...repoPaths, opts.env?.PYTHONPATH ?? process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
       CREATE_EVALS_ALLOW: (opts.allowHosts ?? []).join(","),
       PYTHONUNBUFFERED: "1",
     },

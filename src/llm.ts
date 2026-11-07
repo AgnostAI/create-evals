@@ -31,6 +31,52 @@ export const DEFAULT_MODELS = () => ({
   judge: process.env.CREATE_EVALS_JUDGE_MODEL || "claude-sonnet-5-5",
 });
 
+/** Tokens create-evals itself spent this process, per model. Your agent's own model calls aren't in here. */
+export const usage: Record<string, { calls: number; input: number; output: number; cacheRead: number; cacheWrite: number }> = {};
+
+function addUsage(model: string, u: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }) {
+  const row = (usage[model] ??= { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  row.calls++;
+  row.input += u.input ?? 0;
+  row.output += u.output ?? 0;
+  row.cacheRead += u.cacheRead ?? 0;
+  row.cacheWrite += u.cacheWrite ?? 0;
+}
+
+// USD per million input / output tokens, Anthropic first-party rates. Unknown models get no dollar figure.
+const PRICES: [RegExp, number, number][] = [
+  [/fable|mythos/, 10, 50],
+  [/opus-5-5/, 4, 20],
+  [/opus/, 5, 25],
+  [/sonnet-4/, 3, 15],
+  [/sonnet/, 2, 10],
+  [/haiku-5/, 0.1, 0.5],
+  [/haiku/, 1, 5],
+];
+
+/** Estimated dollars for create-evals' own calls so far, or undefined if a model's price is unknown. */
+export function cost(): number | undefined {
+  let total = 0;
+  for (const [m, u] of Object.entries(usage)) {
+    const price = PRICES.find(([re]) => re.test(m));
+    if (!price) return undefined;
+    // Cache writes cost 1.25x input, reads 0.1x.
+    total += ((u.input + u.cacheWrite * 1.25 + u.cacheRead * 0.1) * price[1] + u.output * price[2]) / 1e6;
+  }
+  return total;
+}
+
+/** One line for the end of a command: "create-evals model calls: 41 calls, 312k tokens, about $0.84". */
+export function usageLine(): string | undefined {
+  const rows = Object.values(usage);
+  if (!rows.length) return undefined;
+  const calls = rows.reduce((n, u) => n + u.calls, 0);
+  const tokens = rows.reduce((n, u) => n + u.input + u.output + u.cacheRead + u.cacheWrite, 0);
+  const usd = cost();
+  const k = tokens >= 1e6 ? `${(tokens / 1e6).toFixed(1)}M` : `${Math.round(tokens / 1000)}k`;
+  return `create-evals model calls: ${calls}, ${k} tokens${usd !== undefined ? `, about $${usd < 0.1 ? usd.toFixed(3) : usd.toFixed(2)}` : ""} (your agent's own calls not included)`;
+}
+
 /** The env var holding the key a model needs. */
 export function keyFor(modelId: string): string {
   return provider(modelId).name === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
@@ -90,6 +136,7 @@ export const model: Model = {
           response_format: { type: "json_schema", json_schema: { name: "reply", schema: req.schema, strict: true } },
         },
       );
+      addUsage(req.model, { input: res.usage?.prompt_tokens, output: res.usage?.completion_tokens });
       const choice = res.choices?.[0];
       if (choice?.message?.refusal) throw new ModelError(`${req.model} refused: ${choice.message.refusal}`);
       if (!choice?.message?.content) throw new ModelError(`${req.model} returned no content (finish_reason ${choice?.finish_reason}).`);
@@ -118,6 +165,8 @@ export const model: Model = {
         ...(fallback ? { fallbacks: "default" } : {}),
       },
     );
+    // With a server-side fallback, the turn may have run on another model: count it under the one that answered.
+    addUsage(res.model ?? req.model, { input: res.usage?.input_tokens, output: res.usage?.output_tokens, cacheRead: res.usage?.cache_read_input_tokens, cacheWrite: res.usage?.cache_creation_input_tokens });
     if (res.stop_reason === "refusal") throw new ModelError(`${req.model} declined this request.`);
     const text = (res.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
     try {

@@ -1,0 +1,3 @@
+domain,payload
+datadog.com,"{""domain"": ""datadog.com"", ""sellsAgents"": true}"
+"salesforce.com","{""domain"": ""salesforce.com"", ""sellsAgents"": false}"

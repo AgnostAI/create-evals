@@ -72,6 +72,8 @@ export async function converse(agent: AgentDefinition, profile: Profile, opts: R
       } catch (e) {
         events.push({ turn: agentTurn, kind: "error", name: "state() failed", input: (e as Error).message });
       }
+      // A function's output is its outcome: a JSON reply becomes the state, so checks and reviews can read fields.
+      if (state === undefined && profile.input !== undefined) state = parseJson(turns.findLast((t) => t.role === "agent")?.text);
     } finally {
       try {
         await session.close?.();
@@ -99,13 +101,24 @@ export async function converse(agent: AgentDefinition, profile: Profile, opts: R
   return trace;
 }
 
+/** The value of a JSON reply (a fenced ```json block works too), or undefined if it isn't JSON. */
+export function parseJson(text: string | undefined): unknown {
+  const t = text?.trim().replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/, "$1");
+  if (!t || !/^[[{]/.test(t)) return undefined;
+  try {
+    return JSON.parse(t);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Run many conversations with bounded concurrency. */
-export async function converseAll(agent: AgentDefinition, profiles: Profile[], opts: RunOptions & { concurrency?: number; onDone?: (t: Trace) => void } = {}): Promise<Trace[]> {
+export async function converseAll(agent: AgentDefinition | ((p: Profile) => AgentDefinition), profiles: Profile[], opts: RunOptions & { concurrency?: number; onDone?: (t: Trace) => void } = {}): Promise<Trace[]> {
   const queue = [...profiles];
   const out: Trace[] = [];
   const worker = async () => {
     for (let p = queue.shift(); p; p = queue.shift()) {
-      const t = await converse(agent, p, opts);
+      const t = await converse(typeof agent === "function" ? agent(p) : agent, p, opts);
       out.push(t);
       opts.onDone?.(t);
     }
