@@ -23,6 +23,7 @@ export const flaky = defineAgent({
   name: "flaky",
   kind: "function",
   description: "Flips a coin.",
+  example: {},
   start: () => ({ send: async () => JSON.stringify({ qualified: calls++ % 2 === 0 }) }),
 });
 

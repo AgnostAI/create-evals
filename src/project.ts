@@ -2,7 +2,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import * as nodeModule from "node:module";
 import { register } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { AgentDefinition } from "./agent.js";
 import { guardNetwork, shiftClock } from "./sandbox.js";
 
@@ -89,6 +89,33 @@ export async function prepare(root: string, config: Config) {
 function resolveSelf() {
   const here = new URL(".", import.meta.url);
   const self = ["index.js", "index.ts"].map((f) => new URL(f, here)).find((u) => existsSync(u))!.href;
+  const cjsUrl = new URL("index.cjs", here);
+  const cjs = existsSync(cjsUrl) ? fileURLToPath(cjsUrl) : undefined;
+  // require() (a binding compiled as CommonJS, e.g. in a repo without package.json) goes through
+  // Module._resolveFilename, which Node 22's registerHooks doesn't cover. Wrap it too: hand require() the
+  // CommonJS build (dist/index.cjs), and let "./x.js" find ./x.ts.
+  const Module = (nodeModule as any).Module ?? nodeModule;
+  const resolveFilename = Module._resolveFilename;
+  if (typeof resolveFilename === "function" && !resolveFilename.__createEvals) {
+    const wrapped = function (this: unknown, request: string, ...rest: unknown[]) {
+      try {
+        return resolveFilename.call(this, request, ...rest);
+      } catch (e) {
+        if (request === "create-evals") return cjs ?? fileURLToPath(self);
+        // "./agent.js" meaning ./agent.ts, as TypeScript writes it: tsx maps this, but not on this path in Node 22.
+        if (/^\.{1,2}\/.*\.[cm]?js$/.test(request)) {
+          try {
+            return resolveFilename.call(this, request.replace(/js$/, "ts"), ...rest);
+          } catch {
+            // fall through to the original error
+          }
+        }
+        throw e;
+      }
+    };
+    (wrapped as any).__createEvals = true;
+    Module._resolveFilename = wrapped;
+  }
   const registerHooks = (nodeModule as any).registerHooks as undefined | ((hooks: object) => void);
   if (!registerHooks) return;
   registerHooks({
