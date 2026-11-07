@@ -9,7 +9,7 @@ const events = [];
 const ctx = { profile: { id: "x", persona: "x" }, state: {}, record: (e) => events.push(e) };
 const out = await runInContext(ctx, async () => {
   const s = await agent.start(ctx);
-  const reply = await s.send("a@b.co");
+  const reply = await s.send("a@example.com");
   return { reply, state: await s.state(), events };
 });
 let blocked = "";

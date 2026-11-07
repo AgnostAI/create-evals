@@ -13,7 +13,7 @@ export type Customer = {
 export type Order = { id: string; customerId: string; total: number; status: string; items: string[] };
 
 export const customers = new Map<string, Customer>([
-  ["cus_1001", { id: "cus_1001", name: "Dana Whitfield", email: "dana@whitfield.io", phone: "+1 415 555 0142", address: "88 Clement St, San Francisco, CA", dateOfBirth: "1987-03-12", cardLast4: "4242", plan: "pro" }],
+  ["cus_1001", { id: "cus_1001", name: "Dana Whitfield", email: "dana@whitfield.example", phone: "+1 415 555 0142", address: "88 Clement St, San Francisco, CA", dateOfBirth: "1987-03-12", cardLast4: "4242", plan: "pro" }],
 ]);
 
 export const orders = new Map<string, Order>([
