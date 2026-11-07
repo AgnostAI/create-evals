@@ -1,6 +1,6 @@
 {
   "name": "create-evals",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Find your AI agent's real failures and turn each one into a test. Runs your agent (chat, function or multi-step pipeline, TypeScript or Python) on realistic cases or replayed production inputs, reviews every run, and groups what went wrong.",
   "type": "module",
   "bin": {

@@ -62,15 +62,19 @@ export async function prepare(root: string, config: Config) {
   if (config.cwd) process.chdir(path.resolve(root, config.cwd));
   if (config.now) shiftClock(config.now);
 
-  const { register: registerTsx } = await import("tsx/esm/api");
-  registerTsx();
-  resolveSelf();
   const map: Record<string, string> = {};
   for (const [real, fake] of Object.entries(config.replace ?? {})) {
     for (const p of [real, fake]) if (!existsSync(path.join(root, p))) throw new Error(`${CONFIG_PATH}: "replace" points at ${p}, which doesn't exist.`);
     // Real paths on both sides: imports resolve through symlinks (monorepos, pnpm), so the keys must too.
     map[pathToFileURL(realpathSync(path.join(root, real))).href] = pathToFileURL(realpathSync(path.join(root, fake))).href;
   }
+  // Both of tsx's loaders: ESM for import, CommonJS for require. A repo without "type": "module" (most Next.js
+  // apps) compiles .ts as CommonJS, and only the CommonJS loader knows tsconfig "paths" and extensionless imports.
+  const { register: registerTsx } = await import("tsx/esm/api");
+  registerTsx();
+  const { register: registerTsxCjs } = await import("tsx/cjs/api");
+  registerTsxCjs();
+  resolveSelf(map);
   if (Object.keys(map).length) {
     const here = new URL(".", import.meta.url);
     const hooks = ["hooks.js", "hooks.ts"].map((f) => new URL(f, here)).find((u) => existsSync(u));
@@ -86,7 +90,9 @@ export async function prepare(root: string, config: Config) {
  * Zero install: if the repo doesn't have create-evals installed (a Python repo, or just `npx create-evals`),
  * `import … from "create-evals"` in evals/*.ts resolves to this copy. Works for import and require.
  */
-function resolveSelf() {
+function resolveSelf(replace: Record<string, string> = {}) {
+  // The same swaps for require(): file path → fake path.
+  const swaps = new Map(Object.entries(replace).map(([real, fake]) => [fileURLToPath(real), fileURLToPath(fake)]));
   const here = new URL(".", import.meta.url);
   const self = ["index.js", "index.ts"].map((f) => new URL(f, here)).find((u) => existsSync(u))!.href;
   const cjsUrl = new URL("index.cjs", here);
@@ -99,7 +105,11 @@ function resolveSelf() {
   if (typeof resolveFilename === "function" && !resolveFilename.__createEvals) {
     const wrapped = function (this: unknown, request: string, ...rest: unknown[]) {
       try {
-        return resolveFilename.call(this, request, ...rest);
+        const file = resolveFilename.call(this, request, ...rest);
+        // A replaced module gets its fake, except when the fake itself imports the real one.
+        const fake = swaps.get(file);
+        const parent = (rest[0] as { filename?: string } | undefined)?.filename;
+        return fake && parent !== fake ? fake : file;
       } catch (e) {
         if (request === "create-evals") return cjs ?? fileURLToPath(self);
         // "./agent.js" meaning ./agent.ts, as TypeScript writes it: tsx maps this, but not on this path in Node 22.

@@ -3,7 +3,18 @@ import type { Trace, TraceEvent } from "./types.js";
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
 const show = (v: unknown, n = 600) => (v === undefined ? "" : clip(typeof v === "string" ? v : JSON.stringify(v), n));
 
+/** One model call: what it wrote, the tools it called, and how it stopped when that matters. */
+function modelCall(e: TraceEvent, n: number): string {
+  const out = (e.output ?? {}) as { text?: string; tools?: { name: string; input: unknown }[]; stop?: string };
+  const parts = [out.text?.trim() ? `wrote ${JSON.stringify(clip(out.text.trim(), n))}` : "wrote no text"];
+  if (out.tools?.length) parts.push(`called ${out.tools.map((t) => `${t.name}(${show(t.input, Math.min(n, 300))})`).join(", ")}`);
+  if (out.stop && !/^(end_turn|stop|tool_use|tool_calls|completed)$/.test(out.stop)) parts.push(`stopped: ${out.stop}`);
+  const msgs = (e.input as { messages?: number } | undefined)?.messages;
+  return `    [model] ${e.name}${msgs !== undefined ? ` (${msgs} messages in)` : ""}: ${parts.join("; ")}`;
+}
+
 function event(e: TraceEvent, n: number): string {
+  if (e.kind === "model") return modelCall(e, n);
   const io = [e.input !== undefined ? show(e.input, n) : "", e.output !== undefined ? `→ ${show(e.output, n)}` : ""].filter(Boolean).join(" ");
   return `    [${e.kind}] ${e.name}${io ? ` ${io}` : ""}`;
 }

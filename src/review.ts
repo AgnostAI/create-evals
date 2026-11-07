@@ -31,7 +31,7 @@ const REVIEW_SCHEMA = {
   additionalProperties: false,
 };
 
-const SYSTEM = `You review one run of an AI agent, the way a senior engineer reads traces to find bugs. A run is either a conversation with a user, or one input the agent processed (possibly through several steps) and the output it produced. You see the input or what the user said, what the agent said or returned, every tool call, step and event in between ([tool], [state], [error] lines), and the end state.
+const SYSTEM = `You review one run of an AI agent, the way a senior engineer reads traces to find bugs. A run is either a conversation with a user, or one input the agent processed (possibly through several steps) and the output it produced. You see the input or what the user said, what the agent said or returned, every tool call, step and event in between ([tool], [state], [error] lines), and the end state. [model] lines, when present, are the agent's own model calls: what the model wrote and which tools it called, before the app turned that into the reply. When a [model] line wrote something the AGENT reply doesn't show (advice dropped, text replaced), the app lost it: that's a bug in the code, not the model. "(N messages in)" is how much of the conversation the model was sent.
 
 Find where the agent did something wrong. Judge against the agent's own instructions and what a careful professional in its role would do.
 
@@ -45,6 +45,7 @@ Start with the instructions' explicit rules (anything phrased never, always, onl
 - In conversations, losing track of earlier turns: contradicting itself, repeating questions, forgetting what it did.
 - Offering options, facts or promises that turn out wrong later in the same run (e.g. offering a slot the system then refuses): find why, from the tool results.
 - Failing to help with a legitimate request it could have handled.
+- Missing information: before blaming the agent for not knowing something, check what its model was told (the prompt it received, the messages it was sent). If the information never reached the model (left out of the prompt, history cut short), the bug is in the code that builds its input: say so.
 - Following its instructions into a bad outcome: if obeying the instructions leaves the user's legitimate need unmet (a dead end, a pointless deflection), report it and say the instructions cause it. Instructions can be the bug.
 - Replies that are cut off mid-sentence or empty.
 
@@ -82,15 +83,22 @@ export function grounded(evidence: string, transcript: string): boolean {
 }
 
 /** Review one trace. Problems whose quoted evidence isn't in the transcript are dropped. */
+/** The system prompt the agent's model actually received (its first recorded model call), if any. */
+export function receivedPrompt(trace: Trace): string | undefined {
+  const first = trace.events.find((e) => e.kind === "model" && (e.input as { system?: string } | undefined)?.system);
+  return (first?.input as { system?: string } | undefined)?.system;
+}
+
 export async function review(trace: Trace, ctx: { description: string; instructions: string }, modelId: string): Promise<Review> {
   const transcript = render(trace);
+  const prompt = receivedPrompt(trace);
   const out = await model.json<{ problems: Problem[]; simulator_issues: string[]; summary: string }>({
     model: modelId,
     system: SYSTEM,
     messages: [
       {
         role: "user",
-        content: `THE AGENT: ${ctx.description}\n\nITS INSTRUCTIONS:\n${ctx.instructions || "(none provided)"}\n\n${trace.profile.input !== undefined ? "ONE RUN (USER is the input, AGENT is the output)" : `THE CONVERSATION (the user was simulated; its persona: ${trace.profile.persona})`}\n\n${transcript}`,
+        content: `THE AGENT: ${ctx.description}\n\nITS INSTRUCTIONS:\n${ctx.instructions || "(none provided)"}\n\n${prompt ? `THE PROMPT ITS MODEL ACTUALLY RECEIVED (first model call; built at runtime, so it can differ from the files above, and it's what the model knew):\n${prompt.slice(0, 20_000)}\n\n` : ""}${trace.profile.input !== undefined ? "ONE RUN (USER is the input, AGENT is the output)" : `THE CONVERSATION (the user was simulated; its persona: ${trace.profile.persona})`}\n\n${transcript}`,
       },
     ],
     schema: REVIEW_SCHEMA,
@@ -134,6 +142,9 @@ export async function group(traces: Trace[], description: string, modelId: strin
 - Name each mode concretely, in terms of this agent's behavior ("Tells guests their real booking was fake"), never a generic category ("Hallucination").
 - Group by likely root cause, not by symptom. Different symptoms often share one cause: an agent that loses track of what it did earlier will deny real actions, repeat them, and confess to mistakes it didn't make. Put those in one mode named after the cause, and list the symptoms in the title or rule.
 - Keep genuinely different causes apart, even if they look alike.
+- Aim for few modes. Many modes that each hold one or two notes usually means one cause was split: before answering, check each pair of modes for a shared cause (one missing piece of context, one broken tool, one heuristic) and merge them.
+- When the cause is in code rather than the model's judgment (history cut short, a tool that does nothing, a heuristic that misfires, information never put in the prompt), say so in the title.
+- Write "should" as the outcome that must hold for the user or the system ("A follow-up exists for the time she asked"), not as advice to the model ("The agent should remember…").
 - Put every note in exactly one mode. A mode with a single note is fine.${
       previous.length
         ? `\n- These modes exist from an earlier round. When notes fit one, reuse its exact id and title so the developer can follow it across rounds:\n${previous.map((m) => `  ${m.id}: ${m.title.replace(/^\[new\] /, "")}`).join("\n")}`

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { AgentDefinition } from "./agent.js";
 import { basicChecks } from "./checks.js";
 import { runInContext, type Context } from "./context.js";
+import { settle } from "./observe.js";
 import { DEFAULT_MODELS } from "./llm.js";
 import type { Profile, Trace, TraceEvent, Turn } from "./types.js";
 import { nextUserMessage } from "./user.js";
@@ -75,6 +76,8 @@ export async function converse(agent: AgentDefinition, profile: Profile, opts: R
       // A function's output is its outcome: a JSON reply becomes the state, so checks and reviews can read fields.
       if (state === undefined && profile.input !== undefined) state = parseJson(turns.findLast((t) => t.role === "agent")?.text);
     } finally {
+      // Model responses still being read (streams) belong on this trace.
+      await settle(ctx);
       try {
         await session.close?.();
       } catch {

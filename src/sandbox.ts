@@ -4,6 +4,7 @@ import https from "node:https";
 import net from "node:net";
 import { syncBuiltinESMExports } from "node:module";
 import { maybeCurrent } from "./context.js";
+import { observe } from "./observe.js";
 import { MODEL_HOSTS } from "./llm.js";
 
 export const blocked: string[] = [];
@@ -69,7 +70,17 @@ export function guardNetwork(allow: string[] = []) {
   globalThis.fetch = (async (input: any, init?: any) => {
     const host = hostOf(input) ?? "localhost";
     if (!permitted(host)) throw deny(host);
-    return realFetch(input, init);
+    // The agent's own model calls go on the trace (create-evals' own run outside the conversation).
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input?.url;
+    const seen = url ? observe(url, init?.method ?? (input as Request)?.method, init?.body) : undefined;
+    try {
+      const res = await realFetch(input, init);
+      seen?.(res);
+      return res;
+    } catch (e) {
+      seen?.(e as Error);
+      throw e;
+    }
   }) as typeof fetch;
   for (const mod of [http, https] as const) {
     for (const fn of ["request", "get"] as const) {
