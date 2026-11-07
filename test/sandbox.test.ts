@@ -47,7 +47,8 @@ describe("clock", () => {
     expect(Date()).toContain("2026");
     expect(before instanceof Date).toBe(true);
     expect(new Date() instanceof Date).toBe(true);
-    expect(Math.abs(Temporal.Now.instant().epochMilliseconds - pinned)).toBeLessThan(1000);
+    // Temporal ships in Node 26+; on older Node only Date is shifted.
+    if (typeof Temporal !== "undefined") expect(Math.abs(Temporal.Now.instant().epochMilliseconds - pinned)).toBeLessThan(1000);
     const t0 = Date.now();
     await new Promise((r) => setTimeout(r, 20));
     expect(Date.now()).toBeGreaterThan(t0);
