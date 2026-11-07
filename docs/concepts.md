@@ -12,9 +12,9 @@ run → review → group → confirm → test → fix
  └── too easy ────┘
 ```
 
-1. **Run.** Get real conversations. With production traffic, you'd use traces. Before launch you have none, so you manufacture them: the real agent against simulated users.
+1. **Run.** Get real runs. With production traffic, replay its inputs (`create-evals import`): they cover what's common. Before launch you have none, so you manufacture them: the real agent against realistic inputs and simulated users. Either way, add cases aimed at the rules and the rare edges, because real traffic rarely covers them. Run each case several times: an answer that flips is a finding in itself.
 2. **Review.** Read every conversation and note the first thing that went wrong, with evidence. Free text, not categories.
-3. **Group.** Notes collapse into a handful of failure modes, grouped by root cause and counted. They emerge from *this* agent's behavior, so nobody has to write a category list.
+3. **Group.** Notes collapse into a handful of failure modes, grouped by root cause and counted. They emerge from *this* agent's behavior, so nobody has to write a category list. Some failures only show when runs are compared: the same input answered differently, or two steps of a pipeline applying one rule two ways.
 4. **Confirm.** Clear bugs (the agent contradicts its own records, crashes, blocks its own job) are just reported. Where the right behavior is a product decision, a person who knows what "right" looks like picks it, from plain-language options. That's the only judgment a human has to make.
 5. **Test.** Each bug becomes a test that reproduces it. If it doesn't fail on today's agent, it isn't a test yet.
 6. **Fix,** and keep the test forever as a regression lock.
@@ -57,6 +57,6 @@ The strongest check is what actually happened: what's in the database, what was 
 
 Models are nondeterministic. A test that passes once can fail one time in five. Tests run several times and need a pass count:
 - New tests start as **usually** passes. They're reported, but they don't block.
-- After they've passed reliably post-fix, they're promoted to **always**, which blocks CI.
+- After they've passed reliably (every run, and the case never flipped), they're promoted to **always**, which blocks CI. A test that guards a prompt rule must also fail when the rule is deleted (`create-evals ablate`); otherwise it protects nothing.
 
 This is how Gemini CLI's behavioral evals work, and it keeps CI trustworthy.
