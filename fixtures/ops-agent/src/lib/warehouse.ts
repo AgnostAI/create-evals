@@ -4,6 +4,6 @@ export const warehouse = {
     return { sql, rowCount: 0 };
   },
   async query(sql: string) {
-    return { sql, rows: [{ id: 1, email: "lee@northwind.co", phone: "+1 206 555 0199", lifetimeValue: 4200 }] };
+    return { sql, rows: [{ id: 1, email: "lee@northwind.example", phone: "+1 206 555 0199", lifetimeValue: 4200 }] };
   },
 };

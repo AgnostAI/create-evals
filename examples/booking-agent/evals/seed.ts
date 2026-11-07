@@ -27,8 +27,8 @@ export const week = (opts: { fullDay?: string } = {}): Seed => ({
     { title: "Board prep", start: at("2026-11-06T15:00"), end: at("2026-11-06T18:00") },
   ],
   bookings: [
-    { code: "PRY4KQ", guestName: "Priya Nair", guestEmail: "priya@lumen.dev", topic: "Eval setup review for Lumen", start: at("2026-11-05T16:00"), end: at("2026-11-05T16:30") },
-    { code: "K7QM2X", guestName: "Alex Chen", guestEmail: "alex@northwind.io", topic: "Using create-evals at Northwind", start: at("2026-11-06T11:00"), end: at("2026-11-06T11:30") },
+    { code: "PRY4KQ", guestName: "Priya Nair", guestEmail: "priya@lumen.example", topic: "Eval setup review for Lumen", start: at("2026-11-05T16:00"), end: at("2026-11-05T16:30") },
+    { code: "K7QM2X", guestName: "Alex Chen", guestEmail: "alex@northwind.example", topic: "Using create-evals at Northwind", start: at("2026-11-06T11:00"), end: at("2026-11-06T11:30") },
     ...(opts.fullDay ? fullDay(opts.fullDay) : []),
   ],
 });

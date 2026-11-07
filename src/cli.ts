@@ -13,7 +13,7 @@ import { registered, setCurrentFile, type Registered } from "./scenario.js";
 import { render } from "./trace.js";
 import type { FailureMode, Profile, Trace } from "./types.js";
 
-const VERSION = "0.1.4";
+const VERSION = "0.1.5";
 const tty = process.stdout.isTTY;
 const c = (code: number) => (s: string) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
 const [bold, dim, red, green, yellow] = [c(1), c(2), c(31), c(32), c(33)];
@@ -24,14 +24,14 @@ ${bold("Start here")}
   npx create-evals                  set up the skill, then open your coding agent and run /create-evals
 
 ${bold("Day to day")}
-  create-evals find                 run simulated users, review every conversation, list what went wrong
+  create-evals find                 run your agent on realistic cases, review every run, list what went wrong
   create-evals test                 run the tests in evals/ (--tier always in CI)
   create-evals hook                 run them before every commit (optional)
   create-evals ci                   run them in GitHub Actions (optional)
 
 ${bold("Building blocks")} (the skill uses these)
   init [--function]                 scaffold evals/agent.ts and ${CONFIG_PATH}
-  check [--message m]               one short conversation, to prove the setup works
+  check [--message m]               run the example input (or one short chat), to prove the setup works
   run [--profiles f] [--only a,b] [--repeat n]
   review [--all]                    note what went wrong in each new trace
   group                             merge the notes into failure modes (${DIR}/failures.json)
@@ -222,7 +222,7 @@ Now open your coding agent in this folder and say:
 
   ${bold("/create-evals")}   ${dim("(or: \"find what my agent gets wrong and write evals for it\")")}
 
-It runs your agent against simulated users, shows you what went wrong, asks you about anything
+It runs your agent on realistic cases (chats, functions or pipelines), shows you what went wrong, asks you about anything
 that's your call, and writes tests. Takes about 20–30 minutes. Needs ANTHROPIC_API_KEY.`);
 }
 
@@ -288,7 +288,7 @@ async function cmdCheck(f: Flags) {
         maxTurns: 2,
       };
   if (!fn) requireKey(DEFAULT_MODELS().user);
-  console.log(dim(`Running one short conversation with ${agent.name}…`));
+  console.log(dim(`Running ${fn ? "the example input" : "one short conversation"} with ${agent.name}…`));
   const t = await converse(agent, profile, { userModel: DEFAULT_MODELS().user });
   saveTrace(t, "checks");
   console.log(render(t));
@@ -323,7 +323,7 @@ async function cmdRun(f: Flags) {
   if (!queue.length) fail("No profiles to run.");
   const userModel = (f["user-model"] as string) || DEFAULT_MODELS().user;
   if (queue.some((p) => p.input === undefined)) requireKey(userModel);
-  console.log(dim(`Running ${queue.length} conversation(s) with ${agent.name}…`));
+  console.log(dim(`Running ${queue.length} case(s) with ${agent.name}…`));
   const traces = await converseAll(agent, queue, {
     concurrency: count(f, "concurrency", config.concurrency ?? 4),
     userModel,
@@ -334,7 +334,7 @@ async function cmdRun(f: Flags) {
   });
   const flagged = traces.filter((t) => t.checks.length || t.ended === "agent-error").length;
   console.log(`\n${traces.length} traces saved to ${DIR}/traces/${flagged ? `, ${yellow(`${flagged} with basic-check findings`)}` : ""}. Next: create-evals review`);
-  if (traces.every((t) => t.ended === "user-error" || t.ended === "agent-error")) fail("Every conversation failed before it got going. Check the errors above (create-evals show <id>).");
+  if (traces.every((t) => t.ended === "user-error" || t.ended === "agent-error")) fail("Every run failed before it got going. Check the errors above (create-evals show <id>).");
 }
 
 async function cmdReview(f: Flags) {
@@ -366,7 +366,7 @@ async function cmdReview(f: Flags) {
     }),
   );
   const reviewed = todo.filter((t) => t.review).length;
-  console.log(`\n${withProblems}/${reviewed} reviewed conversations had problems${reviewed < todo.length ? red(`; ${todo.length - reviewed} reviews failed`) : ""}. Next: create-evals group`);
+  console.log(`\n${withProblems}/${reviewed} reviewed runs had problems${reviewed < todo.length ? red(`; ${todo.length - reviewed} reviews failed`) : ""}. Next: create-evals group`);
   if (!reviewed) process.exit(1);
 }
 
@@ -384,15 +384,15 @@ async function cmdGroup(f: Flags) {
   for (const m of modes) if (previous.length && !known.has(m.id) && !m.traces.some((t) => seen.has(t))) m.title = `[new] ${m.title}`;
   if (previous.length) writeFileSync(dir("failures.prev.json"), readFileSync(dir("failures.json")));
   writeFileSync(dir("failures.json"), JSON.stringify({ reviewed: reviewed.length, modes }, null, 2) + "\n");
-  if (!modes.length) return console.log(green(`No problems found in ${reviewed.length} conversations. Make the profiles harder and run again.`));
-  console.log(bold(`${modes.length} failure mode(s) across ${reviewed.length} reviewed conversations:\n`));
+  if (!modes.length) return console.log(green(`No problems found in ${reviewed.length} runs. Make the cases harder and run again.`));
+  console.log(bold(`${modes.length} failure mode(s) across ${reviewed.length} reviewed runs:\n`));
   for (const m of modes) printMode(m, reviewed.length);
   console.log(dim(`Saved to ${DIR}/failures.json. Read the traces behind each mode (create-evals show <trace>). Report clear bugs; ask the developer only about judgment calls, in plain words.`));
 }
 
 function printMode(m: FailureMode, total: number) {
   const sev = m.severity === "high" ? red(m.severity) : m.severity === "medium" ? yellow(m.severity) : dim(m.severity);
-  console.log(`${bold(m.title)}  ${dim(`${m.id} · ${m.traces.length}/${total} conversations ·`)} ${sev}`);
+  console.log(`${bold(m.title)}  ${dim(`${m.id} · ${m.traces.length}/${total} runs ·`)} ${sev}`);
   console.log(`  rule: ${m.should}`);
   for (const n of m.notes.slice(0, 3)) console.log(dim(`  - ${n}`));
   console.log();

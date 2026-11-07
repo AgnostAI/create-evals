@@ -7,7 +7,7 @@ You're going to give the developer **about 10 evals**: concrete cases, each with
 To find cases that matter, don't guess. Run the agent on many realistic cases, read what it actually did, and pick the ones that show what's broken (and a few things it gets right). The developer never sees that work. They see ~10 one-line cases, answer yes or no to each, and get their evals.
 
 ```
-1 set up → 2 profiles → 3 run, review, group → 4 pick ~10 cases → 5 developer answers y/n → 6 write the evals → 7 done (offer commit hook / CI)
+1 set up → 2 cases → 3 run, review, group → 4 pick ~10 cases → 5 developer answers y/n → 6 write the evals → 7 done (offer commit hook / CI)
                 ▲                    │
                 └─ found little: harder cases ─┘
 ```
@@ -18,20 +18,20 @@ Work in the repo root. `npx -y create-evals docs` prints the full reference (con
 
 ### 1. Set up: run the agent like production, safely
 
-```bash
-npx -y create-evals init
-```
+Read the agent's code first: find the entry point production uses (route handler, CLI, worker, job), every tool and step, and what each one touches outside the process. Then decide its **shape** from what production sends in and gets back. Don't assume it's a chat:
+- **Function:** input in, output out, no back-and-forth. Classifiers, triage, research, extraction, scoring, and **pipelines** of several LLM steps. Run `npx -y create-evals init --function`.
+- **Chat:** a person talks to it over several turns (support bot, assistant, scheduler). Run `npx -y create-evals init`.
 
-This writes `evals/agent.ts` (the binding) and `evals/create-evals.json` (the config). Install dependencies with the repo's own package manager (pnpm, yarn or npm, whichever lockfile it has), so you run the versions production runs. Read the agent's code first: find the entry point production uses (the route handler, CLI, or worker), how it keeps conversation history, every tool, and what each tool touches outside the process.
+This writes `evals/agent.ts` (the binding) and `evals/create-evals.json` (the config). Install dependencies with the repo's own package manager (pnpm, yarn or npm, whichever lockfile it has), so you run the versions production runs.
 
 **The binding** (`evals/agent.ts`) exports `defineAgent({ name, description, instructions, start })`:
-- `description`: what the agent does and who talks to it. Simulated users and the reviewer read this.
+- `description`: what the agent does, what it gets and who uses its output. The reviewer (and, for chats, simulated users) read this.
 - `instructions`: repo-relative paths to the system prompt and policy files (or literal text), so the reviewer can judge the agent against its own rules.
-- `start(ctx)`: starts one conversation. It builds fresh state, and returns `{ send(message) → reply text, state() → end state }`.
-  - **`send` must call the agent the way production does, and keep history the way production does.** If production keeps tool calls between turns, keep them; if it keeps only text, keep only text. A different history is a different agent, and history bugs are among the most common real failures.
+- `start(ctx)`: starts one run (one input for a function, one conversation for a chat). It builds fresh state, and returns `{ send(message) → reply text, state() → end state }`.
+  - **`send` must call the agent the way production does.** For a function, it receives the input as JSON text and returns the output as text. For a chat, it also keeps history the way production does: if production keeps tool calls between turns, keep them; if only text, only text. A different history is a different agent.
   - `ctx.record({ kind: "tool" | "state", name, input, output })` logs what happened, so the reviewer can check what the agent *said* against what it *did*. Record **both** the agent's own tool calls with their results (e.g. from the model's response parts) **and** every change your fakes make. With only one of them, reviewers misjudge: they can't tell whether the agent looked something up.
   - `state()` returns plain data describing what the agent changed: records, sent messages, files.
-  - Per-conversation data goes on `ctx.state`. Code running inside the conversation (including fakes) reads it with `current()` from `create-evals`.
+  - Per-run data goes on `ctx.state`. Code running inside the run (including fakes) reads it with `current()` from `create-evals`.
 
 **What the tools touch.** Keep the agent's own code running, and fake only what's dangerous or what you need to control. For each external system, take the first option that works:
 1. Harmless (read-only, public): leave it real, and add its host to `allowHosts`.
@@ -39,18 +39,24 @@ This writes `evals/agent.ts` (the binding) and `evals/create-evals.json` (the co
 3. Otherwise, write a small in-memory fake of the developer's own integration module, with the same exports, and swap it in: `"replace": { "src/google.ts": "evals/fake-google.ts" }`. The fake keeps state on `current().state`, records each change, and should behave like the real service (errors included). Never fake modules inside `node_modules`.
 4. Last resort: wrap the tool's `execute` in the binding. Then the tool's own code isn't tested, so say so in the report.
 
-Never change the agent's source to make it testable without asking the developer. If a bug blocks everything after it (a crash on every turn), you can apply the one-line fix in an eval-only overlay config (`npx -y create-evals run --config evals/overlay.json`, with `replace` pointing at a patched copy) to explore further, and report the fix as finding #1.
+Never change the agent's source to make it testable without asking the developer. If a bug blocks everything after it (a crash on every input), you can apply the one-line fix in an eval-only overlay config (`npx -y create-evals run --config evals/overlay.json`, with `replace` pointing at a patched copy) to explore further, and report the fix as finding #1.
 
 **The config** (`evals/create-evals.json`):
 - `replace`: modules to swap for fakes.
 - `allowHosts`: hosts the agent may reach. Model APIs are always allowed; **everything else is blocked**, localhost included (add `"localhost"` for a local sandbox), and a blocked call fails loudly in the trace.
 - `env`: variables set before the agent loads. `"${OTHER}"` references another variable, e.g. `"OPENAI_API_KEY": "${ANTHROPIC_API_KEY}"` with `"OPENAI_BASE_URL": "https://api.anthropic.com/v1/"` runs an OpenAI-SDK agent on Claude.
 - `now`: an ISO time the clock starts at. Use it when the agent's behavior depends on dates.
-- `concurrency`: set to 1 if conversations would share state.
+- `concurrency`: set to 1 if runs would share state.
 
-**Agents that aren't chats** (classifiers, triage, extractors, pipelines: one input → one output) use the same loop. Run `npx -y create-evals init --function`, and set `kind: "function"` plus an `example` input in the binding. Profiles are `{ "id": "...", "input": { ...any JSON... } }`, with no persona. `send()` receives the input as JSON text, calls the function, records anything in between (model calls, which model answered), and returns the output as text for the reviewer. Write the inputs yourself: realistic, varied, and aimed at where the function must make a judgment. `npx -y create-evals list` shows all inputs and outputs side by side, which is where rates and outliers show up.
+**Functions and pipelines.** Set `kind: "function"` and an `example` input in the binding. `send()` calls the function, records anything in between (model calls, which model answered), and returns the output as text for the reviewer. For a **pipeline** (e.g. triage → account research → people → hooks):
+- Bind it from its real entry point, so each case tests what production produces end to end.
+- `ctx.record` each step's input and output (`{ kind: "tool", name: "triage", input, output }`), so the reviewer can see *which step* went wrong, and return the final output.
+- If the whole pipeline takes minutes per input, bind the steps where the judgments happen and feed them realistic outputs of the steps before.
+- Steps that call outside services (search, enrichment, CRMs, email) get fakes or sandboxes like any tool.
 
-**Agents in another language** (Python, Go…). In a Python repo, check `pyproject.toml` first: with setuptools' automatic package discovery (no explicit `packages`), a top-level `evals/` folder can break `pip install -e .` ("Multiple top-level packages discovered"). If so, tell the developer, and suggest excluding it (`[tool.setuptools.packages.find] exclude = ["evals*"]`) rather than renaming. The binding is still TypeScript, and the agent runs as a child process, one per conversation:
+`npx -y create-evals list` shows all inputs and outputs side by side, which is where rates and outliers show up.
+
+**Agents in another language** (Python, Go…). In a Python repo, check `pyproject.toml` first: with setuptools' automatic package discovery (no explicit `packages`), a top-level `evals/` folder can break `pip install -e .` ("Multiple top-level packages discovered"). If so, add `[tool.setuptools.packages.find] exclude = ["evals*"]` yourself (don't rename the folder), and mention it only if asked. The binding is still TypeScript, and the agent runs as a child process, one per run:
 
 ```ts
 // evals/agent.ts
@@ -91,57 +97,65 @@ Then:
 npx -y create-evals check
 ```
 
-This runs one short conversation and prints it, with every recorded event (`--message "…"` sends exactly one message instead). Fix what it reports. Before moving on, confirm three things by reading the output:
-- the agent's replies are real;
-- the events show its tool calls and state changes;
+This runs the `example` input (or, for a chat, one short conversation) and prints it, with every recorded event (`--message "…"` sends exactly that instead). Fix what it reports. Before moving on, confirm three things by reading the output:
+- the agent's output is real;
+- the events show its tool calls, steps and state changes;
 - no request was blocked that should have been faked.
 
-### 2. Profiles: who talks to this agent
+### 2. Cases: what this agent gets
 
-Write `.create-evals/profiles.json`:
+Write 10–15 cases in `.create-evals/profiles.json`, from what you learned reading the code. Cover the jobs the agent exists for, then the situations around them.
+
+**A function or pipeline** gets inputs: realistic, varied, and aimed at where it must make a judgment.
 
 ```json
 { "profiles": [
-  { "id": "berlin-tuesday", "persona": "You're Lena Vogel (lena@kiteworks.de), a product lead in Berlin. You want 30 minutes with Shubham on Tuesday afternoon your time…", "setup": { "timeZone": "Europe/Berlin" }, "maxTurns": 8 }
+  { "id": "series-d-uk-hq", "input": { "company": "Quill", "domain": "quill.io", "notes": "London HQ, US agent team in New York" } }
 ] }
 ```
 
-- `persona` is a realistic person: who they are, what they want, how they behave (patient, vague, pushy, changes their mind), and the details they know (names, emails, ids that exist in your fake's seed data). Write it in second person.
-- `setup` is passed to `start()` for anything agent-specific (which seed, the user's time zone, a world event to inject).
-- `opening` (optional) fixes the first message.
+**A chat** gets simulated people:
 
-Write 10–15 profiles from what you learned reading the code. Cover the jobs the agent exists for, then the situations around them. Ask these questions about *this* agent, and turn the answers into people:
-- What do users claim that the tools could check?
-- Who is allowed to cause each change, and how does the agent know who it's talking to?
+```json
+{ "profiles": [
+  { "id": "berlin-tuesday", "persona": "You're Lena Vogel (lena@kiteworks.example), a product lead in Berlin. You want 30 minutes with Shubham on Tuesday afternoon your time…", "setup": { "timeZone": "Europe/Berlin" }, "maxTurns": 8 }
+] }
+```
+
+- `persona` is a realistic person: who they are, what they want, how they behave (patient, vague, pushy, changes their mind), and the details they know (names, emails, ids that exist in your fake's seed data). Write it in second person. `opening` (optional) fixes the first message.
+- `setup` is passed to `start()` for anything agent-specific (which seed, a time zone, a world event to inject).
+
+Ask these questions about *this* agent, and turn the answers into cases:
+- Where is the call close (borderline inputs, missing data, sources that disagree, stale information)?
+- What do inputs or users claim that the tools could check?
 - Which rules live only in the prompt?
-- What edges do its limits have (in the user's terms: their time zone, their units)?
-- What must the agent remember across turns?
-- What happens right before and after it commits an action ("yes, do it", a change of mind, "did it go through?")?
-- What can tools return besides success?
-- Where does user or tool text end up?
-- What do users want that the rules forbid?
+- What edges do its limits have (time zones, units, thresholds)?
+- What can tools and earlier steps return besides success?
+- Where does outside text end up, and can it give the agent instructions?
+- What happens right before and after it commits an action (writes, sends, marks ready)?
+- For chats: what must it remember across turns, who may cause each change, and what do users want that the rules forbid?
 
-Most profiles should be ordinary users doing ordinary things over several turns. Many real failures show up there, not in attacks.
+Most cases should be ordinary inputs doing ordinary things. Many real failures show up there, not in attacks.
 
 ### 3. Run, review, group
 
 ```bash
 npx -y create-evals find        # = run + review + group
 # or step by step:
-npx -y create-evals run         # every profile once; --repeat 2 to see variance; --only id,id
+npx -y create-evals run         # every case once; --repeat 2 to see variance; --only id,id
 npx -y create-evals review      # a model reads each new trace and notes what went wrong, quoting evidence
 npx -y create-evals group       # merges the notes into failure modes: .create-evals/failures.json
 ```
 
 Then do what the tools can't: **read**. `npx -y create-evals list` shows every run on one screen (with its end state); `list --json` gives you all of it to filter, so you don't need to write a script. Open at least the traces behind each failure mode with `npx -y create-evals show <trace-id>`, plus a few marked ok.
-- Drop notes that are wrong: the reviewer misread something, or the simulated user caused it.
-- Look for what the reviewer can't see: failures caused by the instructions themselves (the agent obeys and the user still hits a dead end), and patterns that only show across many conversations.
+- Drop notes that are wrong: the reviewer misread something, or a bad input or the simulated user caused it.
+- Look for what the reviewer can't see: failures caused by the instructions themselves (the agent obeys and the user still hits a dead end), and patterns that only show across many runs.
 - Fix your fakes if *they* misbehaved, and re-run.
 - If the reviewer missed something you can see, note it yourself.
 
 Traces from setup mistakes or broken fakes shouldn't count: remove them with `npx -y create-evals drop <trace-id…>`. Start a clean round with `npx -y create-evals reset` (it archives the old one). When you regroup, new failure modes are marked `[new]`.
 
-**If you found little, the profiles were too easy.** Write a harder round aimed at what earlier runs never touched (tools never called, rules never tested, longer conversations, users who push back). Run, review and group again. Two or three rounds is normal. Stop when a new round finds nothing new.
+**If you found little, the cases were too easy.** Write a harder round aimed at what earlier runs never touched (tools or steps never exercised, rules never tested, closer calls, longer conversations, users who push back). Run, review and group again. Two or three rounds is normal. Stop when a new round finds nothing new.
 
 ### 4. Pick about 10 cases
 
@@ -184,7 +198,7 @@ import { scenario } from "create-evals";
 import agent from "./agent.js";
 
 scenario(agent, "1. Podium (US lead, LinkedIn says United States) qualifies", {
-  profile: { input: podium },          // a chat agent: { persona: "…", maxTurns: 6 }
+  profile: { input: podium },          // a chat: { persona: "…", maxTurns: 6 }
   runs: 2,
   check({ state }) {
     assert.equal(state.passed, true, "Podium should qualify");
@@ -209,8 +223,6 @@ Run: `npx create-evals test`
 | 2 | Cresta: sells "AI Agent Testing 2.0" | qualify: no | ✗ yes |
 | 4 | Toyota: only its headquarters is in the US | US team: no | ✓ no |
 ```
-
-In a Python repo, a new top-level `evals/` folder can break `pip install -e .` (setuptools finds two packages): if it does, add `[tool.setuptools.packages.find] exclude = ["evals*"]` to `pyproject.toml` yourself, without mentioning it in the done message.
 
 **Protect what works:** add `tier: "always"` to every eval that passes today. Only those can block a commit or CI later; failing ones are known bugs and never block. When an eval starts passing after a fix, mark it `always` too.
 
@@ -238,11 +250,11 @@ Causes, file paths, how things are faked, and costs are for when they ask. If th
 | Command | What it does |
 |---|---|
 | `create-evals init [--function]` | Scaffold `evals/agent.ts` (chat or function) and `evals/create-evals.json` |
-| `create-evals check` | One short conversation; verifies the setup |
-| `create-evals run [--profiles f] [--only a,b] [--repeat n]` | Conversations → `.create-evals/traces/` |
+| `create-evals check` | Runs the `example` input (or one short conversation); verifies the setup |
+| `create-evals run [--profiles f] [--only a,b] [--repeat n]` | Every case → `.create-evals/traces/` |
 | `create-evals review [--all] [--model m]` | Notes per trace (problems with quoted evidence) |
 | `create-evals group [--model m]` | Failure modes → `.create-evals/failures.json` |
-| `create-evals show <trace-id> [--full]` | A conversation with its events, end state and review |
+| `create-evals show <trace-id> [--full]` | One run with its events, end state and review |
 | `create-evals drop <trace-id…>` | Delete traces that shouldn't count |
 | `create-evals reset` | Archive this round's traces and failures; start fresh |
 | `create-evals test [files] [--runs n] [--tier always] [--only text] [--precommit]` | Run `evals/*.eval.ts` (`--precommit`: the `always` evals, one run each, skipped without a key) |
@@ -251,4 +263,4 @@ Causes, file paths, how things are faked, and costs are for when they ask. If th
 | `create-evals list` | Every run on one screen: input, outcome, output, problems |
 | `create-evals status` | Counts of traces, reviews and failure modes |
 
-**Models.** Simulated users, the reviewer and grouping default to `claude-sonnet-5-5`. Override them with `--model`, `--user-model`, the config's `models`, or `CREATE_EVALS_{USER,REVIEW,GROUP,JUDGE}_MODEL`. OpenAI models work with `OPENAI_API_KEY`.
+**Models.** The reviewer, grouping and (for chats) simulated users default to `claude-sonnet-5-5`. Override them with `--model`, `--user-model`, the config's `models`, or `CREATE_EVALS_{USER,REVIEW,GROUP,JUDGE}_MODEL`. OpenAI models work with `OPENAI_API_KEY`.

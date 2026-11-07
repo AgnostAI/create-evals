@@ -38,12 +38,12 @@ See [architecture.md](architecture.md) for the components and [concepts.md](conc
 - [x] A fresh subagent, given only the skill, sets up and runs the loop on the booking agent
 
 ### M4: Generalize
-- [x] Agnost `e2e-demo` (Nimo, raw OpenAI-style SDK on Claude): finds the refund dead-end unaided (the coding agent did; the reviewer missed it until it learned that instructions can be the bug)
+- [x] An internal support demo bot (raw OpenAI-style SDK on Claude): finds the refund dead-end unaided (the coding agent did; the reviewer missed it until it learned that instructions can be the bug)
 - [x] Non-conversational path (fixtures/triage-agent; opening = input, maxTurns 1)
-- [x] A Python agent (Agnost enterprise-outbound research agents, subprocess binding)
+- [x] A Python agent (an internal company-research pipeline, subprocess binding)
 - [x] fixtures/support-agent
 - [x] 2–3 public agents from GitHub (sandboxed: `--ignore-scripts`, network guard)
-- [x] Model comparison: reviewer on Haiku / Sonnet / Opus (agent on Haiku vs Sonnet in the Nimo run)
+- [x] Model comparison: reviewer on Haiku / Sonnet / Opus (agent on Haiku vs Sonnet in the support-bot run)
 
 ### M5: Ship quality
 - [x] README, docs (concepts, architecture, binding guide, CLI + API reference)
@@ -65,7 +65,7 @@ See [architecture.md](architecture.md) for the components and [concepts.md](conc
 - **Fresh agents, given only the skill, found real bugs on three agents** (each ran ~25–40 conversations, about 25 minutes):
   - *Booking agent (buggy commit):* the lost-history bug (8/15 conversations), plus a bug nobody had found: `find_open_times` ignores the per-day cap that booking enforces, so it offers times on full days and then refuses them. The reviewer missed that one; the coding agent found it by reading traces.
   - *Support-agent fixture:* the same lost-history class (the agent disowns real refunds and redoes them; one run paid $300 on a $150 request), PII shared with unverified callers, and refund splitting to dodge approval. 6 of 7 tests fail on today's agent.
-  - *Nimo (Agnost e2e-demo):* the known refund dead end (10/10 billing conversations), and replies cut off by a 300-token cap (empty on Sonnet).
+  - *Internal support demo bot:* the known refund dead end (10/10 billing conversations), and replies cut off by a 300-token cap (empty on Sonnet).
 - **Lost tool history is common.** Two of three real agents returned only text from their chat function, so the model can't see what it did on earlier turns.
 - **The reviewer needs a human-like reader on top.** Its high-severity notes were accurate. About half its low ones were wrong or trivial, and it missed failures the instructions themselves cause. The skill now makes the coding agent read traces, and the reviewer prompt asks for precision and treats instructions as a possible bug.
 - **Simulated-user refusals happen** on impostor personas. Fixed with authorized-testing framing and server-side fallback, and runs where the simulator fails are skipped rather than failed.

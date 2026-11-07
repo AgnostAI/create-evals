@@ -12,3 +12,7 @@ examples/*/node_modules/
 examples/*/.create-evals/
 *.tgz
 test/fixtures/*/node_modules
+
+.context/
+.env.*
+!.env.example
