@@ -48,7 +48,7 @@ create-evals run
 | File | Written by | Purpose |
 |---|---|---|
 | `evals/agent.ts` | coding agent | the binding: how to start a conversation and send a message |
-| `evals/create-evals.json` | coding agent | `replace`, `allowHosts`, `env`, `now`, `concurrency`, `models` |
+| `evals/create-evals.json` | coding agent | `replace`, `allowHosts`, `env`, `envFile`, `now`, `cwd`, `concurrency`, `models` |
 | `.create-evals/profiles.json` | coding agent, or `import` from real records | simulated users and inputs |
 | `.create-evals/traces/*.json` | `run`, `test`, `check` | one conversation each: turns, events, end state, checks, review |
 | `.create-evals/failures.json` | `group` | failure modes with counts, traces and the rule each breaks |

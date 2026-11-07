@@ -18,7 +18,7 @@ import { render } from "./trace.js";
 import type { FailureMode, Profile, Trace } from "./types.js";
 import { describe, modeRates, variance } from "./variance.js";
 
-const VERSION = "0.1.6";
+const VERSION = "0.1.7";
 const tty = process.stdout.isTTY;
 const c = (code: number) => (s: string) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
 const [bold, dim, red, green, yellow] = [c(1), c(2), c(31), c(32), c(33)];
@@ -46,7 +46,7 @@ ${bold("Building blocks")} (the skill uses these)
   docs                              the full reference: config, binding API, scenario(), spawnSession(), Python helper
   drop <id…> | reset                discard bad traces, or archive this round and start fresh
   test [files] [--runs n] [--tier always|usually] [--only text] [--precommit]
-  ablate --test t (--remove text --in file | --patch f.diff)
+  ablate --test t (--remove text | --remove-file f) --in file | --patch f.diff
                                     does a test have teeth? runs it on a temp copy with the change applied
 
 Options: --config <file>, --model <id> (review/group), --user-model <id>, --concurrency <n>
@@ -394,8 +394,13 @@ async function checkOne(agent: AgentDefinition, f: Flags): Promise<boolean> {
   if (!t.events.length) notes.push("No events were recorded. If the agent used tools, record them with ctx.record() so reviews can check said-vs-did.");
   // The reviewer believes the record. Tool calls logged without their input usually mean the recorder misreads the
   // response (e.g. server-side tools logged under the wrong name), and reviewers then report problems that didn't happen.
-  const blank = t.events.filter((e) => e.kind === "tool" && (e.input === undefined || e.input === null || (typeof e.input === "object" && Object.values(e.input as object).every((v) => v === null || v === undefined || v === ""))));
-  if (blank.length) notes.push(`${blank.length} of ${t.events.length} recorded tool calls have no input (${[...new Set(blank.map((e) => e.name))].slice(0, 3).join(", ")}). Check the recorder against the raw response: the reviewer takes events at face value.`);
+  const empty = (v: unknown) => v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length) || (typeof v === "object" && !Array.isArray(v) && Object.values(v as object).every((x) => x === null || x === undefined || x === ""));
+  const tools = t.events.filter((e) => e.kind === "tool");
+  const names = (es: typeof tools) => [...new Set(es.map((e) => e.name))].slice(0, 3).join(", ");
+  const noInput = tools.filter((e) => empty(e.input));
+  const noOutput = tools.filter((e) => empty(e.output));
+  if (noInput.length) notes.push(`${noInput.length} of ${tools.length} recorded tool calls have no input (${names(noInput)}). Check the recorder against the raw response: the reviewer takes events at face value.`);
+  if (noOutput.length) notes.push(`${noOutput.length} of ${tools.length} recorded tool calls have no result (${names(noOutput)}). If the tool did return something (a built-in search, a fake), the recorder is dropping it, and the reviewer will think the agent acted on nothing.`);
   // A function's JSON reply is its end state; only a reply that isn't JSON (or a chat with no state()) is worth a note.
   if (t.state === undefined && !fn) notes.push("The session reports no end state. If the agent changes anything, return it from state().");
   if (t.state === undefined && fn && t.ended !== "agent-error") notes.push("The reply isn't JSON, so checks can only read it as text. Return JSON.stringify(output) from send() to check fields.");
@@ -505,18 +510,18 @@ async function cmdGroup(f: Flags) {
   const flips = variance(traces, await decisionFields(agents));
   if (!modes.length && !flips.length) return console.log(green(`No problems found in ${reviewed.length} runs. Make the cases harder and run again.`));
   if (modes.length) console.log(bold(`${modes.length} failure mode(s) across ${reviewed.length} reviewed runs:\n`));
-  for (const m of modes) printMode(m, reviewed.length, traces);
+  for (const m of modes) printMode(m, reviewed.length, traces, flips);
   printVariance(flips);
   console.log(dim(`Saved to ${DIR}/failures.json. Read the traces behind each mode (create-evals show <trace>). Report clear bugs; ask the developer only about judgment calls, in plain words.`));
 }
 
-function printMode(m: FailureMode, total: number, traces: Trace[]) {
+function printMode(m: FailureMode, total: number, traces: Trace[], flips: ReturnType<typeof variance>) {
   const sev = m.severity === "high" ? red(m.severity) : m.severity === "medium" ? yellow(m.severity) : dim(m.severity);
   const where = m.kind === "inconsistency" ? "inconsistency, found by comparing runs" : `${m.traces.length}/${total} runs`;
   console.log(`${bold(m.title)}  ${dim(`${m.id} · ${where} ·`)} ${sev}`);
   console.log(`  rule: ${m.should}`);
-  const rates = m.kind === "inconsistency" ? [] : modeRates(m, traces);
-  if (rates.length) console.log(yellow(`  happens in ${rates.slice(0, 4).join(", ")}${rates.length > 4 ? ", …" : ""}`));
+  const rates = m.kind === "inconsistency" ? [] : modeRates(m, traces, flips);
+  if (rates.length) console.log(yellow(`  ${rates.slice(0, 4).join("; ")}${rates.length > 4 ? "; …" : ""}`));
   for (const n of m.notes.slice(0, m.kind === "inconsistency" ? 4 : 3)) console.log(dim(`  - ${n}`));
   console.log();
 }
@@ -532,10 +537,14 @@ function printVariance(flips: ReturnType<typeof variance>) {
     for (const v of strong.slice(0, 15)) console.log(`  ${v.profile} ${dim(`(${v.agent}, ${v.runs} runs)`)}: ${describe(v)}`);
     if (strong.length > 15) console.log(dim(`  …and ${strong.length - 15} more`));
   }
-  if (weak.length) {
-    console.log(dim(`${strong.length ? "Also: " : ""}${weak.length} input(s) where only labels or numbers changed, e.g. ${weak.slice(0, 2).map((v) => `${v.profile}: ${describe(v, 1)}`).join("; ")}.`));
+  const moved = weak.filter((v) => v.fields.length);
+  const reviewOnly = weak.filter((v) => !v.fields.length);
+  if (moved.length) {
+    console.log(dim(`${strong.length ? "Also: " : ""}${moved.length} input(s) where only labels or numbers changed, e.g. ${moved.slice(0, 2).map((v) => `${v.profile}: ${describe(v, 1)}`).join("; ")}.`));
     console.log(dim(`  Name the fields that are decisions with \`decisions: [...]\` in the binding. All of it: create-evals list --json → "variance"`));
   }
+  // Same output, different verdicts: the reviewer varies too. Worth a look, not a flip.
+  if (reviewOnly.length) console.log(dim(`${reviewOnly.length} input(s) got the same decisions every run, but the reviewer flagged only some runs (e.g. ${reviewOnly.slice(0, 3).map((v) => v.profile).join(", ")}).`));
   if (flips.length) console.log();
 }
 
@@ -788,8 +797,10 @@ function cmdImport(f: Flags) {
  */
 async function cmdAblate(f: Flags) {
   const test = f.test;
-  if (typeof test !== "string" || !test) fail('Usage: create-evals ablate --test "<name or part of it>" (--remove "<exact text>" --in <file> | --patch <file.diff>) [--runs n]');
-  if (!f.patch && !(typeof f.remove === "string" && typeof f.in === "string")) fail("Say what to change: --remove \"<exact text>\" --in <file>, or --patch <file.diff>.");
+  if (typeof test !== "string" || !test) fail('Usage: create-evals ablate --test "<name or part of it>" ((--remove "<exact text>" | --remove-file <file>) --in <file> | --patch <file.diff>) [--runs n]');
+  // --remove-file: the exact text in a file, for rules that span lines (no shell quoting).
+  if (typeof f["remove-file"] === "string") f.remove = readFileSync(path.resolve(root, f["remove-file"]), "utf8").replace(/\n$/, "");
+  if (!f.patch && !(typeof f.remove === "string" && typeof f.in === "string")) fail("Say what to change: --remove \"<exact text>\" (or --remove-file <file>) --in <file>, or --patch <file.diff>.");
   const runs = String(count(f, "runs", 2));
   const copy = copyRepo(root);
   const cli = fileURLToPath(import.meta.url);

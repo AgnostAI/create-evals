@@ -4,7 +4,7 @@ Guidance for coding agents (and humans) changing this repo. To *use* create-eval
 
 ## What this is
 
-create-evals finds an AI agent's real failures and turns them into tests. It runs the agent against simulated users, reviews each conversation, groups the problems, and runs scenario tests. Read [docs/concepts.md](docs/concepts.md), then [docs/architecture.md](docs/architecture.md); the source map is at the end of the architecture doc. [docs/plan.md](docs/plan.md) is the live plan: check off what you finish and add what you learn under Findings.
+create-evals finds an AI agent's real failures and turns them into tests. It runs the agent on realistic cases (simulated users, written inputs, or replayed production inputs), reviews each run, groups the problems, compares runs for flips and disagreements, and runs scenario tests. Read [docs/concepts.md](docs/concepts.md), then [docs/architecture.md](docs/architecture.md); the source map is at the end of the architecture doc. [docs/plan.md](docs/plan.md) is the live plan: check off what you finish and add what you learn under Findings.
 
 ## Commands
 

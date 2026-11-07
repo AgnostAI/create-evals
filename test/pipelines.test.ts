@@ -65,6 +65,7 @@ describe("variance", () => {
       qualified: true,
       "facts.industry": "Retail",
       tags: ["a", "b"],
+      "people.length": 1,
       "people[0].keep": false,
     });
     expect(matches("people[3].keep", ["people[].keep"])).toBe(true);
@@ -119,13 +120,24 @@ describe("variance", () => {
     ];
     const v = variance(traces);
     expect(v.map((x) => [x.profile, x.strong])).toEqual([["acme", true], ["beta", false]]);
+    // acme found 2 people in one run and 1 in the other: a count, not "(not in output)" per field of the second.
+    expect(v[0]!.fields.map((f) => f.field)).toEqual(["status", "people.length"]);
+    expect(JSON.stringify(v)).not.toContain("not in output");
     expect(describeVariance(v[0]!)).toBe("status: qualified 1/2, excluded 1/2; +1 more field(s)");
+  });
+
+  it("reports a crash as its own outcome, not as fields missing from the output", () => {
+    const traces = [trace("c1", "acme", { qualified: true }), trace("c2", "acme", { qualified: true }), trace("c3", "acme", undefined, { ended: "agent-error", turns: [{ role: "user", text: "{}" }, { role: "agent", text: "" }] })];
+    const v = variance(traces);
+    expect(v[0]!.fields).toEqual([{ field: "outcome", kind: "declared", values: [["ok", 2], ["crashed", 1]] }]);
+    expect(JSON.stringify(v)).not.toContain("not in output");
   });
 
   it("gives a failure mode's rate per repeated input", () => {
     const review = (n: number) => ({ model: "m", problems: Array(n).fill({ turn: 0, what: "x", evidence: "x", severity: "high" }), simulatorIssues: [], summary: "" });
     const traces = [trace("d1", "datadog", {}, { review: review(1) }), trace("d2", "datadog", {}, { review: review(1) }), trace("d3", "datadog", {}, { review: review(0) })];
-    expect(modeRates({ id: "m", title: "t", should: "s", severity: "high", traces: ["d1", "d2"], notes: [] }, traces)).toEqual(["2 of 3 runs of datadog"]);
+    // Same output every run, flagged in only 2: the rate is about the reviewer, and it says so.
+    expect(modeRates({ id: "m", title: "t", should: "s", severity: "high", traces: ["d1", "d2"], notes: [] }, traces)).toEqual(["datadog: flagged in 2 of 3 runs (same decisions in all; the agent likely erred every time)"]);
     expect(variance(traces)[0]).toMatchObject({ reviewed: 3, withProblems: 2 });
   });
 });
@@ -147,6 +159,7 @@ describe("consistency", () => {
             ],
           },
           { id: "invented", title: "made up", should: "x", severity: "low", evidence: [{ source: "r1", quote: "nowhere in any run at all" }, { source: "r0", quote: "Salesforce sells Agentforce" }] },
+          { id: "paper", title: "Prompts disagree", should: "y", severity: "low", evidence: [{ source: "triage", quote: "Qualify agent vendors" }, { source: "research", quote: "Salesforce is not an agent vendor" }] },
         ],
       },
     ]);
@@ -156,7 +169,8 @@ describe("consistency", () => {
       { name: "research", description: "research", instructions: "Salesforce is not an agent vendor." },
     ];
     const modes = await consistency(traces, agents, "claude-test");
-    expect(modes.map((x) => x.id)).toEqual(["salesforce-vendor"]);
+    expect(modes.map((x) => x.id)).toEqual(["salesforce-vendor", "paper"]);
+    expect(modes[1]!.title).toBe("Prompts disagree (in the prompts; no run quoted)");
     expect(modes[0]).toMatchObject({ kind: "inconsistency", traces: ["t1"] });
     expect(modes[0]!.notes).toEqual(['t1: "Salesforce sells Agentforce, an agent platform"', 'research instructions: "Salesforce is not an agent vendor"']);
     expect(m.calls[0].body.messages[0].content).toContain("=== agent: research ===");
@@ -270,7 +284,8 @@ describe("CLI on a pipeline of function agents", () => {
     const r = run("ablate", "--test", "agent seller", "--remove", "RULE: companies that sell agents qualify.\n", "--in", "src/prompt.txt", "--runs", "1");
     expect(r.stdout).toContain("✔ agent seller qualifies: has teeth");
     expect(readFileSync(path.join(dir, "src/prompt.txt"), "utf8")).toContain("RULE");
-    const weak = run("ablate", "--test", "agent seller", "--remove", "You qualify accounts.", "--in", "src/prompt.txt", "--runs", "1");
+    writeFileSync(path.join(dir, "rule.txt"), "You qualify accounts.\n");
+    const weak = run("ablate", "--test", "agent seller", "--remove-file", "rule.txt", "--in", "src/prompt.txt", "--runs", "1");
     expect(weak.stdout).toContain("✖ agent seller qualifies: no teeth");
   });
 });
