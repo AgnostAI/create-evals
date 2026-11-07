@@ -17,6 +17,11 @@ export function runInContext<T>(ctx: Context, fn: () => Promise<T>): Promise<T> 
   return storage.run(ctx, fn);
 }
 
+/** Run outside any conversation: create-evals' own model calls (simulated user, judge) mustn't be recorded as the agent's. */
+export function outsideContext<T>(fn: () => T): T {
+  return storage.exit(fn);
+}
+
 /**
  * The conversation this code is running in. Use it in replaced modules and fakes, so each
  * conversation gets its own state even when several run at once.

@@ -1,6 +1,8 @@
 // Model calls over plain fetch, so create-evals never conflicts with the AI SDK version an agent uses.
 // Models: "claude-…" or "anthropic:…" (ANTHROPIC_API_KEY), "gpt-…", "o…" or "openai:…" (OPENAI_API_KEY).
 
+import { outsideContext } from "./context.js";
+
 export interface Message {
   role: "user" | "assistant";
   content: string;
@@ -95,7 +97,7 @@ async function post(url: string, headers: Record<string, string>, body: unknown)
   for (let attempt = 0; ; attempt++) {
     let res: Response;
     try {
-      res = await fetch(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body), signal: AbortSignal.timeout(300_000) });
+      res = await outsideContext(() => fetch(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body), signal: AbortSignal.timeout(300_000) }));
     } catch (e) {
       // Network errors and timeouts: retry, then report as a model failure (tests skip rather than fail).
       if (attempt >= 4) throw new ModelError(`${url}: ${(e as Error).message}`);

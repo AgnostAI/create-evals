@@ -72,6 +72,7 @@ src/
   cli.ts        commands: init, check, import, run, review, group, list, show, test, ablate, status
   project.ts    config, sandbox setup, loading the binding, reading instructions
   sandbox.ts    network guard, shifted clock
+  observe.ts    records the agent's own model calls (request and response, streams included)
   hooks.ts      loader hooks for module replacement
   context.ts    AsyncLocalStorage conversation context: current()
   agent.ts      defineAgent, defineAgents, Session types

@@ -310,3 +310,14 @@ describe("import from stdin", () => {
     expect(JSON.parse(readFileSync(path.join(dir, ".create-evals/profiles.json"), "utf8")).profiles.map((p: any) => p.id)).toEqual(["real-a", "real-b"]);
   });
 });
+
+describe("a Next.js-style repo (CommonJS, tsconfig paths, extensionless imports)", () => {
+  it("loads the agent and swaps a replaced module under require()", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "ce-cjsapp-"));
+    cpSync("test/fixtures/cjsapp", dir, { recursive: true });
+    const r = spawnSync(process.execPath, [path.resolve("dist/cli.js"), "check"], { cwd: dir, encoding: "utf8" });
+    expect(r.stdout + r.stderr).not.toContain("Cannot find module");
+    expect(r.stdout).toContain('{"text":"FAKE ROW 7"}');
+    expect(r.stdout).toContain("[tool] db.find");
+  });
+});

@@ -18,7 +18,7 @@ import { render } from "./trace.js";
 import type { FailureMode, Profile, Trace } from "./types.js";
 import { describe, modeRates, variance } from "./variance.js";
 
-const VERSION = "0.1.7";
+const VERSION = "0.1.8";
 const tty = process.stdout.isTTY;
 const c = (code: number) => (s: string) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
 const [bold, dim, red, green, yellow] = [c(1), c(2), c(31), c(32), c(33)];
@@ -392,6 +392,8 @@ async function checkOne(agent: AgentDefinition, f: Flags): Promise<boolean> {
   if (blocked.length) problems.push(`Blocked network calls to: ${[...new Set(blocked)].join(", ")}. Fake them (evals/create-evals.json "replace") or allow them.`);
   const notes: string[] = [];
   if (!t.events.length) notes.push("No events were recorded. If the agent used tools, record them with ctx.record() so reviews can check said-vs-did.");
+  const modelCalls = t.events.filter((e) => e.kind === "model").length;
+  if (!modelCalls) notes.push("No model calls were seen. They're recorded automatically when the agent calls a model API through fetch (current Anthropic and OpenAI SDKs, Vercel AI SDK, LangChain). For a child process or an SDK on node:http, record them yourself (kind \"model\"), so reviews see what the model was told and wrote.");
   // The reviewer believes the record. Tool calls logged without their input usually mean the recorder misreads the
   // response (e.g. server-side tools logged under the wrong name), and reviewers then report problems that didn't happen.
   const empty = (v: unknown) => v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length) || (typeof v === "object" && !Array.isArray(v) && Object.values(v as object).every((x) => x === null || x === undefined || x === ""));
@@ -409,7 +411,7 @@ async function checkOne(agent: AgentDefinition, f: Flags): Promise<boolean> {
     for (const p of problems) console.log(red(`✖ ${p}`));
     return false;
   }
-  console.log(green(`✔ ${agent.name} runs: ${agentTurns.length} turns, ${t.events.length} events recorded. Trace: ${t.id}`));
+  console.log(green(`✔ ${agent.name} runs: ${agentTurns.length} turns, ${t.events.length} events recorded${modelCalls ? ` (${modelCalls} of them the agent's own model calls)` : ""}. Trace: ${t.id}`));
   return true;
 }
 
@@ -561,10 +563,17 @@ async function decisionFields(agents?: AgentDefinition[]): Promise<Record<string
 }
 
 function cmdShow(f: Flags) {
-  const id = f._[1];
-  if (!id) fail("Usage: create-evals show <trace-id>");
-  const t = findTrace(id);
-  if (!t) fail(`No trace ${id}`);
+  const ids = f._.slice(1);
+  if (!ids.length) fail("Usage: create-evals show <trace-id…>");
+  ids.forEach((id, i) => {
+    const t = findTrace(id);
+    if (!t) return console.log(yellow(`! no trace ${id}`));
+    if (i) console.log(`\n${"─".repeat(60)}\n`);
+    showTrace(t, f);
+  });
+}
+
+function showTrace(t: Trace, f: Flags) {
   console.log(bold(`${t.id}`) + dim(`  persona: ${(t.profile.persona ?? JSON.stringify(t.profile.input) ?? "").slice(0, 200)}`));
   console.log(render(t, { clip: f.full ? 100_000 : 240 }));
   if (t.checks.length) console.log(`\n${yellow("Basic checks:")} ${t.checks.map((x) => `${x.check} (${x.detail})`).join("; ")}`);
@@ -684,19 +693,20 @@ async function cmdTest(f: Flags) {
   console.log(dim(`Running ${tests.length} test(s)…`));
 
   const jobs = tests.flatMap((t) => Array.from({ length: runsOverride ?? t.opts.runs ?? 1 }, (_, i) => ({ t, i })));
-  const results = new Map<Registered, { pass: number; skipped: number; fails: { reason: string; trace: string }[] }>();
+  const results = new Map<Registered, { pass: number; skipped: number; skipReasons: string[]; fails: { reason: string; trace: string }[] }>();
   const queue = [...jobs];
   await Promise.all(
     Array.from({ length: count(f, "concurrency", config.concurrency ?? 4) }, async () => {
       for (let job = queue.shift(); job; job = queue.shift()) {
         const { t } = job;
-        const r = results.get(t) ?? { pass: 0, skipped: 0, fails: [] };
+        const r = results.get(t) ?? { pass: 0, skipped: 0, skipReasons: [], fails: [] };
         results.set(t, r);
         const trace = await converse(t.agent, scenarioProfile(t), { userModel });
         trace.id = `test-${trace.id}`;
         // The simulated user failing (e.g. a model declining the persona) says nothing about the agent.
         if (trace.ended === "user-error" && trace.turns.length < 2) {
           r.skipped++;
+          r.skipReasons.push(`${trace.error}`);
           trace.test = { name: t.name, passed: false, reason: `skipped: ${trace.error}` };
           saveTrace(trace, "tests");
           continue;
@@ -713,6 +723,7 @@ async function cmdTest(f: Flags) {
           const reason = (e as Error).message;
           if ((e as Error).name === "JudgeUnavailable") {
             r.skipped++;
+            r.skipReasons.push(reason);
             trace.test = { name: t.name, passed: false, reason: `skipped: ${reason}` };
             saveTrace(trace, "tests");
             continue;
@@ -727,10 +738,12 @@ async function cmdTest(f: Flags) {
 
   // A test passes when enough counted runs pass for its tier. No counted runs (all skipped) is a failure.
   const verdict = (t: Registered) => {
-    const r = results.get(t) ?? { pass: 0, skipped: 0, fails: [] };
+    const r = results.get(t) ?? { pass: 0, skipped: 0, skipReasons: [], fails: [] };
     const runs = r.pass + r.fails.length;
     const tier = t.opts.tier ?? "usually";
-    const need = Math.min(t.opts.atLeast ?? (tier === "always" ? runs : Math.ceil((runs * 2) / 3)), runs);
+    // Every run must pass unless the test says otherwise: a bug that shows in 1 of 3 runs is still a bug.
+    // The tier only decides whether a failure blocks.
+    const need = Math.min(t.opts.atLeast ?? runs, runs);
     return { r, runs, tier, ok: runs > 0 && r.pass >= need };
   };
   // The same list the developer answered: one line per eval, ✔ or ✖, and one short reason when it fails.
@@ -747,8 +760,8 @@ async function cmdTest(f: Flags) {
     else if (!ok) failed.push(t);
     if (!ok && !waiting && tier === "always") blocking++;
     const mark = ok ? green("✔") : waiting ? dim("◌") : red("✖");
-    const partial = runs > 1 && r.pass > 0 && r.pass < runs ? dim(` (passed ${r.pass} of ${runs} runs)`) : "";
-    const skipped = r.skipped ? dim(` (${r.skipped} run(s) skipped: the simulated user or judge failed)`) : "";
+    const partial = runs > 1 ? dim(` (${r.pass} of ${runs} runs passed)`) : "";
+    const skipped = r.skipped ? dim(` (${r.skipped} run(s) skipped: ${(r.skipReasons[0] ?? "the simulated user or judge failed").replace(/^skipped: /, "").slice(0, 120)})`) : "";
     const note = waiting ? (ok ? yellow(" (passes now: remove `pending`)") : dim(` (pending: ${waiting})`)) : "";
     console.log(`${mark} ${t.name}${partial}${skipped}${note}${tier === "always" && !waiting ? dim(" [always]") : ""}`);
     if (!ok && !waiting && r.fails[0]) {
@@ -801,7 +814,8 @@ async function cmdAblate(f: Flags) {
   // --remove-file: the exact text in a file, for rules that span lines (no shell quoting).
   if (typeof f["remove-file"] === "string") f.remove = readFileSync(path.resolve(root, f["remove-file"]), "utf8").replace(/\n$/, "");
   if (!f.patch && !(typeof f.remove === "string" && typeof f.in === "string")) fail("Say what to change: --remove \"<exact text>\" (or --remove-file <file>) --in <file>, or --patch <file.diff>.");
-  const runs = String(count(f, "runs", 2));
+  // Three runs by default: with one or two, a single lucky or unlucky run decides the verdict.
+  const runs = String(count(f, "runs", 3));
   const copy = copyRepo(root);
   const cli = fileURLToPath(import.meta.url);
   const run = (cwd: string, label: string) => {
@@ -829,9 +843,12 @@ async function cmdAblate(f: Flags) {
     console.log();
     for (const t of after) {
       const was = before?.find((b) => b.name === t.name);
-      if (was && !was.passed) console.log(yellow(`! ${t.name}: fails today too, so this says nothing. Make it pass first.`));
-      else if (!t.passed) console.log(green(`✔ ${t.name}: has teeth. It fails without the change (${t.runs - t.pass} of ${t.runs} runs failed).`));
-      else console.log(red(`✖ ${t.name}: no teeth. It still passes with the change, so it doesn't protect what was changed. Sharpen the input or the check.`));
+      const rates = `${was ? `today ${was.pass}/${was.runs} passed, ` : ""}with the change ${t.pass}/${t.runs} passed`;
+      const failed = t.runs - t.pass;
+      if (was && !was.passed) console.log(yellow(`! ${t.name}: fails today too (${rates}), so this says nothing. Make it pass first.`));
+      else if (failed * 2 >= t.runs && failed > 0) console.log(green(`✔ ${t.name}: has teeth (${rates}).`));
+      else if (failed > 0) console.log(yellow(`~ ${t.name}: weak teeth (${rates}). It catches the change only sometimes: sharpen the input, or run more (--runs 5) before trusting it.`));
+      else console.log(red(`✖ ${t.name}: no teeth (${rates}). It doesn't protect what was changed. Sharpen the input or the check once; if it still passes, the model follows that rule without being told.`));
     }
   } finally {
     if (f.keep) console.log(dim(`Kept the changed copy at ${copy}`));

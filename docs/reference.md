@@ -10,16 +10,16 @@ Run from the agent's repo root, as `npx create-evals <command>`. Nothing needs i
 | `create-evals find` | `run`, then `review`, then `group`: from profiles to "here's what's broken". |
 | `create-evals docs` | Prints this reference (bundled with the package). |
 | `create-evals init [--function] [--python]` | Writes `evals/agent.ts` (a chat binding, or a one-input function binding with `--function`) and `evals/create-evals.json`, and gitignores `.create-evals/`. In a Python repo (Python project files, no `package.json`), or with `--python`, the binding starts `evals/run_agent.py` through `spawnSession`, and that runner is written too. Existing files are kept. |
-| `create-evals check [--message m] [--agent a]` | Runs one short conversation (2 turns, or exactly one message with `--message`) and prints it with every event, for each agent in the binding (or the one named). Fails on agent errors, empty replies and blocked requests. Warns when no events or end state were recorded (for a function agent: when its reply isn't JSON), and when recorded tool calls have no input or no result (usually a recorder bug the reviewer would take at face value). |
+| `create-evals check [--message m] [--agent a]` | Runs one short conversation (2 turns, or exactly one message with `--message`) and prints it with every event, for each agent in the binding (or the one named). Fails on agent errors, empty replies and blocked requests. Says how many of the agent's own model calls were recorded. Warns when no events, model calls or end state were recorded (for a function agent: when its reply isn't JSON), and when recorded tool calls have no input or no result (usually a recorder bug the reviewer would take at face value). |
 | `create-evals import <file\|-> [--input-field f] [--id-field f] [--agent a] [--kind chat\|function] [--limit n] [--out file]` | Turns real records into profiles, merged into `.create-evals/profiles.json` (an imported profile replaces one with the same id). Reads JSONL, JSON (an array, or an object holding one) and CSV (cells that look like JSON are parsed); `-` reads JSONL or JSON from stdin, for a converter script piped in. Each record becomes a function input (the whole record, or `--input-field`, a dotted path), or, if it holds a `messages`/`conversation`/`turns` list, a simulated user who replays its user messages. Profiles are named `real-<id>` from `--id-field` or the first of `id`, `key`, `domain`, `name`, `conversation_id`. Default limit 200. |
 | `create-evals run [--profiles file] [--only a,b] [--repeat n] [--agent a] [--concurrency n] [--user-model m]` | Runs simulated users from `.create-evals/profiles.json` and saves each trace to `.create-evals/traces/`. Each profile runs on the agent its `agent` field names; `--agent` runs only that agent's profiles (and is the agent for profiles that name none). |
 | `create-evals review [--all] [--model m] [--concurrency n]` | Reviews traces without a review, or all of them with `--all`, each against its own agent's instructions, 6 at a time (or `--concurrency`). Writes the review into each trace file. |
 | `create-evals group [--model m] [--no-consistency]` | Groups all reviewed problems into failure modes and writes `.create-evals/failures.json`. With several agents, or function runs, it also compares runs and agents side by side for the same rule applied differently (one agent's output or prompt contradicting another's, or similar inputs treated differently); each such `inconsistency` needs two quotes found in the runs or instructions. The comparison runs after grouping and skips problems the modes already cover. A contradiction backed only by prompt quotes is marked "(in the prompts; no run quoted)". Then it lists inputs whose decisions changed across repeated runs, and, per failure mode, how often the reviewer flagged it per repeated input ("acme: flagged in 2 of 3 runs"); when that input's decisions were the same in every run, it says the agent likely erred every time. |
-| `create-evals show <trace-id> [--full]` | Prints a trace: the conversation, events (clipped unless `--full`), end state, basic checks and review. A prefix of the id works. |
+| `create-evals show <trace-id…> [--full]` | Prints a trace: the conversation, events (clipped unless `--full`), end state, basic checks and review. A prefix of the id works. |
 | `create-evals drop <trace-id…>` | Deletes traces that shouldn't count (setup mistakes, broken fakes). |
 | `create-evals reset` | Moves the current traces and failures to `.create-evals/archive/<time>/`, for a fresh round. |
 | `create-evals test [files…] [--runs n] [--tier always\|usually] [--only text] [--concurrency n] [--precommit] [--report file]` | Runs `evals/*.eval.ts` (or the given files). Exits 1 only when an `always` test fails; `pending` tests never count. `--precommit` = `--tier always --runs 1`, and skips (exit 0) when the model key isn't set. With `--tier always` and no `always` tests, exits 0. `--report` writes the results as JSON (`[{ name, file, tier, passed, pending?, pass, runs, skipped }]`). |
-| `create-evals ablate --test text ((--remove "exact text" \| --remove-file f) --in file \| --patch file.diff) [--runs n] [--no-baseline] [--keep]` | Does a test have teeth? Runs the matching tests today, then on a temp copy of the repo with the change applied (`node_modules` and `.venv` are linked, not copied), and says for each whether it fails without the change. `--remove` text must appear exactly once; `--remove-file` reads it from a file, for text over several lines. `--no-baseline` skips today's run; `--keep` keeps the copy. |
+| `create-evals ablate --test text ((--remove "exact text" \| --remove-file f) --in file \| --patch file.diff) [--runs n] [--no-baseline] [--keep]` | Does a test have teeth? Runs the matching tests today, then on a temp copy of the repo with the change applied (`node_modules` and `.venv` are linked, not copied), and says for each whether it fails without the change. `--remove` text must appear exactly once; `--remove-file` reads it from a file, for text over several lines. Runs 3 times by default, and shows both pass rates. The verdict is "has teeth" (fails at least half the runs without the change), "weak teeth" (fails some) or "no teeth". `--no-baseline` skips today's run; `--keep` keeps the copy. |
 | `create-evals hook` | Adds a pre-commit hook running the `always` evals: appends to husky's `.husky/pre-commit` if the repo already uses husky, else the git hook; for pre-commit/lefthook configs it prints the line to add. Never installs anything or overwrites a hook. |
 | `create-evals ci` | Writes `.github/workflows/evals.yml` running the `always` evals (never overwrites one). Needs the `ANTHROPIC_API_KEY` secret. |
 | `create-evals list [--json]` | Every run trace on one screen: first input, last output (or review summary), end state, outcome, problems, then the inputs that got different answers across repeated runs. `--json` prints `{ runs: [{ id, agent, profile, input, output, ended, turns, checks, problems, lastReply, state, error }], variance: [{ agent, profile, runs, strong, fields: [{ field, kind, values: [[value, count]] }], reviewed?, withProblems? }] }`. A field counts when it's decision-shaped in every run: named in the agent's `decisions` (`kind: "declared"`; then nothing else counts), or, without that, a yes/no (`boolean`), a status-like identifier (`enum`: `qualified`, `not_relevant`), a short label (`label`: at most 3 words, not a URL), a `number`, or a short `list` of labels. Free text never counts. `strong` means a declared field, or a yes/no or status outside a list, flipped; those inputs are listed first, and the rest are summarized on one line. For a function run, `input` is the profile's input and `output` the parsed JSON reply. |
@@ -114,8 +114,8 @@ scenario(agent, "never disowns a booking it made", {
   // or, for a function agent: input: { … }
   // pending: "needs triage to output a roundup field",   // expected to fail until then; never counts as a failure
   runs: 2,                 // default 1, or CREATE_EVALS_RUNS / --runs
-  atLeast: 2,              // default: all runs for "always", ⌈2/3⌉ for "usually"
-  tier: "usually",         // default "usually"; "always" blocks (exit 1)
+  atLeast: 2,              // default: all runs, whatever the tier; lower only for behavior allowed to vary
+  tier: "usually",         // default "usually" (reported, never blocks); "always" blocks (exit 1)
   allow: ["repeated-reply"],
   async check({ trace, state, transcript, said }) { /* throw to fail */ },
 });
@@ -162,7 +162,7 @@ With several agents, each profile says which one: `{ "id": "acme", "agent": "tri
 
 ### Trace (`.create-evals/traces/<id>.json`)
 
-`{ id, agent, profile, startedAt, durationMs, turns: [{role, text}], events: [{turn, kind, name, input?, output?}], state, ended, error?, checks: [{check, turn?, detail}], review?: { model, problems: [{turn, what, evidence, severity}], simulatorIssues, summary }, userModel }`
+`{ id, agent, profile, startedAt, durationMs, turns: [{role, text}], events: [{turn, kind: "tool" | "state" | "error" | "note" | "model", name, input?, output?}], state, ended, error?, checks: [{check, turn?, detail}], review?: { model, problems: [{turn, what, evidence, severity}], simulatorIssues, summary }, userModel }`
 
 `ended` is one of `user-done`, `max-turns`, `agent-error` or `user-error`.
 
@@ -171,6 +171,14 @@ With several agents, each profile says which one: `{ "id": "acme", "agent": "tri
 `{ reviewed, modes: [{ id, title, should, severity, traces: [ids], notes: ["trace: what"], kind? }] }`
 
 `kind: "inconsistency"` marks a rule applied differently across agents or inputs; its notes are the contradicting quotes (`"trace-id: \"…\""` or `"agent instructions: \"…\""`).
+
+### Model calls
+
+When the agent calls a model API through `fetch` (requests to `…/messages`, `…/chat/completions` or `…/responses`, on any host), each call is recorded on the trace as a `model` event:
+- **input:** `{ system?, last, messages, tools? }`. `system` is the system prompt, kept only when it changed since the previous call. `last` is the newest message sent. `messages` is how many conversation messages were sent.
+- **output:** `{ text, tools: [{ name, input }], stop }`. This is what the model wrote, including text the app may drop before the user sees it.
+
+Streams (server-sent events) are read from a copy, so the agent's own reading is unaffected. create-evals' own calls (simulated user, reviewer, judge) aren't recorded. The reviewer also gets the first recorded system prompt, the prompt the model actually received. Not covered: agents in a child process, and SDKs that use `node:http` instead of `fetch` (record those yourself with `kind: "model"`).
 
 ### Basic checks
 

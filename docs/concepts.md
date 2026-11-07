@@ -56,7 +56,8 @@ The strongest check is what actually happened: what's in the database, what was 
 ## Flakiness is a fact; tier it
 
 Models are nondeterministic. A test that passes once can fail one time in five. Tests run several times and need a pass count:
-- New tests start as **usually** passes. They're reported, but they don't block.
+- Every run has to pass for a test to pass: a bug that shows up one time in three is still a bug.
+- New tests start as **usually**. They're reported, but they don't block.
 - After they've passed reliably (every run, and the case never flipped), they're promoted to **always**, which blocks CI. A test that guards a prompt rule must also fail when the rule is deleted (`create-evals ablate`); otherwise it protects nothing.
 
 This is how Gemini CLI's behavioral evals work, and it keeps CI trustworthy.

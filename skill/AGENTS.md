@@ -29,7 +29,8 @@ This writes `evals/agent.ts` (the binding) and `evals/create-evals.json` (the co
 - `instructions`: repo-relative paths to the system prompt and policy files (or literal text), so the reviewer can judge the agent against its own rules.
 - `start(ctx)`: starts one run (one input for a function, one conversation for a chat). It builds fresh state, and returns `{ send(message) → reply text, state() → end state }`.
   - **`send` must call the agent the way production does.** For a function, it receives the input as JSON text and returns the output as text. For a chat, it also keeps history the way production does: if production keeps tool calls between turns, keep them; if only text, only text. A different history is a different agent.
-  - `ctx.record({ kind: "tool" | "state", name, input, output })` logs what happened, so the reviewer can check what the agent *said* against what it *did*. Record **both** the agent's own tool calls with their results (e.g. from the model's response parts) **and** every change your fakes make. With only one of them, reviewers misjudge: they can't tell whether the agent looked something up.
+  - `ctx.record({ kind: "tool" | "state", name, input, output })` logs what happened, so the reviewer can check what the agent *said* against what it *did*. Record **both** the agent's own tool calls with their results (e.g. from the model's response parts) **and** every change your fakes make. With only one of them, reviewers misjudge: they can't tell whether the agent looked something up. If the tool loop lives inside the app (you call one `chat()` and tools run inside it), record tools with a pass-through: `replace` the tools module with a file that imports the real one, wraps each tool to `current().record(...)` its input and output, and re-exports it.
+  - The agent's **model calls are recorded for you** (`[model]` lines: what the model was told, what it wrote, which tools it called) when it calls a model API through `fetch`: current Anthropic and OpenAI SDKs, Vercel AI SDK, LangChain. That's how the reviewer sees text the app drops and the prompt the model really got, even when the prompt is built at runtime from a database. For an agent in a child process, or an SDK on `node:http`, record them yourself (`kind: "model"`), or at least pass the rendered prompt as a literal `instructions` entry.
   - `state()` returns plain data describing what the agent changed: records, sent messages, files.
   - Per-run data goes on `ctx.state`. Code running inside the run (including fakes) reads it with `current()` from `create-evals`.
 
@@ -141,8 +142,9 @@ Ask these questions about *this* agent, and turn the answers into cases:
 - What do inputs or users claim that the tools could check?
 - Which rules live only in the prompt?
 - What edges do its limits have (time zones, units, thresholds)?
-- What can tools and earlier steps return besides success?
+- What can tools and earlier steps return besides success, and what happens when one throws?
 - Where does outside text end up, and can it give the agent instructions?
+- What can a user reach through the tools that isn't theirs (someone else's records, any recipient, any ticket)?
 - What happens right before and after it commits an action (writes, sends, marks ready)?
 - For chats: what must it remember across turns, who may cause each change, and what do users want that the rules forbid?
 
@@ -180,6 +182,8 @@ From what you found, choose **about 10 cases** (8–12):
 Sort each case into one of two kinds:
 - **Clear bug:** the agent defeats its own intent: data silently lost or blanked, output thrown away, a crash, a limit in the prompt that the code enforces differently. The answer is obvious; fill it in.
 - **Your call:** the instructions don't settle it, or settle it in a way the developer might not mean (a policy, a threshold, an exception).
+
+Before you write the list, confirm each case's "today" with a run of its eval or the traces, not from a review summary: summaries can read better or worse than what happened.
 
 Write each as **one line**:
 - **The situation,** in plain words with the specific detail that matters ("Podium: US lead Walker Ward, his LinkedIn says United States").
@@ -226,8 +230,8 @@ scenario(agent, "1. Podium (US lead, LinkedIn says United States) qualifies", {
 });
 ```
 
-- **Check the outcome directly:** the end state or the output field first, then what the agent said. Use `expectJudge` only when the text is the outcome.
-- **Each eval must match today's behavior:** where the agent's behavior differs from their answer, the eval fails today; where it matches, it passes. Run `npx -y create-evals test` and check. A case that should fail but passes needs a sharper input. Use `runs: 2` (or 3 if the agent is flaky).
+- **Check the outcome directly:** the end state or the output field first, then what the agent said. Use `expectJudge` only when the text is the outcome. Check the effect, not a step toward it: "a follow-up exists for tomorrow afternoon" in the state, not "the tool was called with the right id" (a tool can accept the call and do nothing).
+- **Each eval must match today's behavior:** where the agent's behavior differs from their answer, the eval fails today; where it matches, it passes. Run `npx -y create-evals test` and check. A case that should fail but passes needs a sharper input. Use `runs: 3`. Every run must pass by default, so a bug that shows in 1 of 3 runs still fails the eval; set `atLeast` lower only for behavior that's allowed to vary.
 - **Every eval also fails on crashes, empty replies and blocked network calls** automatically.
 - **With several agents,** import the one the eval is about: `import { triage } from "./agent.js"`.
 - **An eval that needs the output to change shape first** (a field the agent doesn't produce yet): write it against the shape you expect and add `pending: "needs triage to output a roundup field"`. It runs and shows as `◌`, never counts as a failure, and `test` tells you when it starts passing.

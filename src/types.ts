@@ -22,7 +22,8 @@ export interface Profile {
 export interface TraceEvent {
   /** Index of the agent turn it happened in. */
   turn: number;
-  kind: "tool" | "state" | "error" | "note";
+  /** "model": one of the agent's own model calls, recorded automatically (what it was told, what it wrote). */
+  kind: "tool" | "state" | "error" | "note" | "model";
   name: string;
   input?: unknown;
   output?: unknown;
